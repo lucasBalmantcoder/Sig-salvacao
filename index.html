@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cobertura da UBS — Residencial Salvação (protótipo)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #17303a;
+    --ink-soft: #4a616a;
+    --paper: #f7f8f6;
+    --line: #d6dcd8;
+    --coberta: #2f8f6b;
+    --atencao: #e3a71f;
+    --descoberta: #c8402f;
+    --accent: #1d5c73;
+    box-sizing: border-box;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    display: grid;
+    grid-template-columns: 340px 1fr;
+  }
+  aside {
+    padding: 20px 20px 24px;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: #fff;
+  }
+  h1 { font-size: 1.15rem; line-height: 1.3; margin: 0 0 4px; }
+  .sub { margin: 0 0 14px; color: var(--ink-soft); font-size: .88rem; }
+  .aviso {
+    border-left: 4px solid var(--atencao);
+    background: #fdf6e3;
+    padding: 8px 10px;
+    font-size: .82rem;
+    margin-bottom: 18px;
+  }
+  h2 { font-size: .95rem; margin: 20px 0 8px; }
+  label { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: .9rem; cursor: pointer; }
+  input[type="text"] {
+    width: 100%; padding: 8px 10px; font: inherit; font-size: .88rem;
+    border: 1px solid var(--line); border-radius: 4px; margin-bottom: 8px;
+  }
+  button, .btn {
+    display: inline-block; font: inherit; font-size: .86rem; font-weight: 600;
+    padding: 8px 12px; border-radius: 4px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; cursor: pointer; margin: 0 6px 6px 0;
+  }
+  button.sec, .btn.sec { background: #fff; color: var(--accent); }
+  button:focus-visible, .btn:focus-within, input:focus-visible {
+    outline: 3px solid #7fb5c9; outline-offset: 2px;
+  }
+  .fonte { font-size: .86rem; margin: 0 0 8px; color: var(--ink-soft); }
+  .fonte strong { color: var(--ink); }
+  #painelGrade { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 6px; margin-top: 6px; background: var(--paper); }
+  #painelGrade[hidden], #painelGrupos[hidden] { display: none; }
+  #painelGrade p { margin: 0 0 8px; font-size: .8rem; color: var(--ink-soft); }
+  .ajuste { margin-bottom: 8px; }
+  .ajuste label { display: flex; justify-content: space-between; margin: 0 0 2px; font-size: .84rem; cursor: default; }
+  .ajuste output { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .ajuste input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+  #tabelaGrupos { max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+  #tabelaGrupos table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  #tabelaGrupos th { position: sticky; top: 0; background: #fff; text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); font-weight: 600; }
+  #tabelaGrupos td { padding: 3px 8px; border-bottom: 1px solid #eef1ee; }
+  #tabelaGrupos td:last-child, #tabelaGrupos th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  #tabelaGrupos tfoot td { font-weight: 700; border-top: 1px solid var(--line); border-bottom: 0; }
+  .cor { width: 12px; height: 12px; border-radius: 2px; display: inline-block; vertical-align: -1px; margin-right: 8px; border: 1px solid rgba(0,0,0,.25); }
+  .barra { display: flex; height: 14px; border-radius: 3px; overflow: hidden; background: var(--line); margin: 8px 0 10px; }
+  .barra span { display: block; height: 100%; }
+  .numeros { display: grid; grid-template-columns: 1fr auto; row-gap: 4px; font-size: .88rem; }
+  .numeros dt { display: flex; align-items: center; gap: 8px; }
+  .numeros dt .cor { margin-right: 0; }
+  .numeros dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+  .gradiente { height: 12px; border-radius: 3px; background: linear-gradient(90deg, #ffd166, #f4845f, #b3261e); margin: 4px 0; }
+  .gradiente-rot { display: flex; justify-content: space-between; font-size: .78rem; color: var(--ink-soft); }
+  #status { margin-top: 18px; font-size: .84rem; color: var(--ink-soft); min-height: 2.4em; }
+  #status.erro { color: var(--descoberta); font-weight: 600; }
+  #map { height: 100%; width: 100%; background: #dfe5e2; }
+  .popup > div { margin: 2px 0; font-size: .85rem; }
+  .popup button { margin: 8px 0 0; }
+  .rotulo-grupo span {
+    display: block; text-align: center; font: 700 10px/14px "Public Sans", system-ui, sans-serif;
+    background: rgba(255,255,255,.92); color: #17303a; border: 1px solid #17303a; border-radius: 3px;
+    pointer-events: none; white-space: nowrap;
+  }
+  input[type="file"] { display: none; }
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 58vh auto; }
+    #map { order: -1; }
+    aside { border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+
+<aside>
+  <h1>Cobertura da UBS<br>Residencial Salvação</h1>
+  <p class="sub">Santarém, Pará — PET-Saúde</p>
+
+  <div class="aviso">Protótipo. As edificações e a situação de cada uma são <strong>simuladas</strong>; não representam dados reais de pacientes.</div>
+
+  <h2>Limite do bairro</h2>
+  <input type="text" id="consulta" value="Residencial Salvação, Santarém, Pará, Brasil" aria-label="Nome do bairro para busca do limite">
+  <button type="button" id="btnBuscar">Buscar limite</button>
+  <label class="btn sec" for="arquivoLimite">Carregar GeoJSON</label>
+  <input type="file" id="arquivoLimite" accept=".geojson,.json,application/geo+json,application/json">
+
+  <h2>Casas (1 retângulo = 1 endereço)</h2>
+  <p class="fonte">Fonte atual: <strong id="fonteAtual">—</strong></p>
+  <button type="button" class="sec" id="btnGrade">Modelo de quadras</button>
+  <button type="button" class="sec" id="btnOSM">Buscar no OpenStreetMap</button>
+  <label class="btn sec" for="arquivoCasas">Carregar GeoJSON</label>
+  <input type="file" id="arquivoCasas" accept=".geojson,.json,application/geo+json,application/json">
+
+  <div id="painelGrade">
+    <p>As quadras seguem o desenho das avenidas e ruas do bairro, com duas fileiras de lotes por quadra. Ajuste até as casas coincidirem com o mapa.</p>
+    <div class="ajuste"><label for="pRot">Rotação <output id="oRot"></output></label><input type="range" id="pRot" min="-10" max="10" step="0.1"></div>
+    <div class="ajuste"><label for="pEsc">Escala do modelo <output id="oEsc"></output></label><input type="range" id="pEsc" min="70" max="130" step="1"></div>
+    <div class="ajuste"><label for="pLw">Largura do lote <output id="oLw"></output></label><input type="range" id="pLw" min="5" max="20" step="0.1"></div>
+    <div class="ajuste"><label for="pLd">Profundidade do lote <output id="oLd"></output></label><input type="range" id="pLd" min="10" max="40" step="0.5"></div>
+    <div class="ajuste"><label for="pRw">Largura das ruas <output id="oRw"></output></label><input type="range" id="pRw" min="6" max="25" step="0.5"></div>
+    <div class="ajuste"><label for="pNorte">Fileiras de quadras <output id="oNorte"></output></label><input type="range" id="pNorte" min="1" max="30" step="1"></div>
+    <div class="ajuste"><label for="pDx">Deslocamento leste–oeste <output id="oDx"></output></label><input type="range" id="pDx" min="-80" max="80" step="1"></div>
+    <div class="ajuste"><label for="pDy">Deslocamento norte–sul <output id="oDy"></output></label><input type="range" id="pDy" min="-80" max="80" step="1"></div>
+    <button type="button" class="sec" id="btnRedefinir">Redefinir ajustes</button>
+  </div>
+
+  <h2>Cor das casas</h2>
+  <label><input type="radio" name="modoCor" value="grupo" checked> Por grupo (verificação)</label>
+  <label><input type="radio" name="modoCor" value="situacao"> Por situação de cobertura</label>
+
+  <div id="painelGrupos">
+    <h2>Grupos (quadras)</h2>
+    <div id="tabelaGrupos"></div>
+  </div>
+
+  <h2>Camadas</h2>
+  <label><input type="checkbox" id="chkCasas" checked> Casas</label>
+  <label><input type="checkbox" id="chkCalor"> Mapa de calor das áreas descobertas</label>
+  <label><input type="radio" name="base" value="osm" checked> Mapa de ruas</label>
+  <label><input type="radio" name="base" value="sat"> Imagem de satélite</label>
+
+  <h2>Situação de cobertura (simulada)</h2>
+  <div class="barra" id="barra" aria-hidden="true"></div>
+  <dl class="numeros">
+    <dt><span class="cor" style="background:var(--coberta)"></span>Cobertas (visita em até 90 dias)</dt><dd id="nCoberta">—</dd>
+    <dt><span class="cor" style="background:var(--atencao)"></span>Atenção (91 a 180 dias)</dt><dd id="nAtencao">—</dd>
+    <dt><span class="cor" style="background:var(--descoberta)"></span>Descobertas (mais de 180 dias)</dt><dd id="nDescoberta">—</dd>
+    <dt>Total de endereços</dt><dd id="nTotal">—</dd>
+  </dl>
+
+  <h2>Intensidade do calor</h2>
+  <div class="gradiente"></div>
+  <div class="gradiente-rot"><span>Poucas descobertas</span><span>Muitas descobertas</span></div>
+
+  <h2>Dados</h2>
+  <button type="button" class="sec" id="btnSimular">Nova simulação de cobertura</button>
+  <button type="button" class="sec" id="btnExportar">Exportar GeoJSON</button>
+
+  <div id="status" role="status" aria-live="polite"></div>
+</aside>
+
+<div id="map" aria-label="Mapa do Residencial Salvação"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  /* ---------- Configuração ---------- */
+  const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter'
+  ];
+  const COR = { coberta: '#2f8f6b', atencao: '#e3a71f', descoberta: '#c8402f' };
+  const ROTULO = {
+    coberta: 'Coberta (visita em até 90 dias)',
+    atencao: 'Atenção (91 a 180 dias)',
+    descoberta: 'Descoberta (mais de 180 dias)'
+  };
+  const RAIO_APROXIMADO_KM = 0.7;
+  const LIMITE_CASAS = 8000;
+
+  // Cores dos grupos (mesma paleta do modelo de verificação em PDF).
+  const PALETA = [
+    { nome: 'Ciano',    hex: '#4fd8e8' },
+    { nome: 'Verde',    hex: '#12b35b' },
+    { nome: 'Laranja',  hex: '#f0a232' },
+    { nome: 'Roxo',     hex: '#b31de6' },
+    { nome: 'Vermelho', hex: '#f23a35' },
+    { nome: 'Amarelo',  hex: '#ffe94a' },
+    { nome: 'Azul',     hex: '#3f6fe0' },
+    { nome: 'Rosa',     hex: '#ff62a8' }
+  ];
+
+  /* Modelo das quadras, medido no mapa de verificação (PDF), em pixels da imagem.
+     Origem do modelo: ponto (700, 300) da imagem; eixo v cresce para o norte. */
+  const AVENIDAS_U = [-455, -182, 194, 467]; // Av. Gavião Real, Av. Pardal, Av. Cardeal, Av. Pirelli
+  const PASSO_RUAS = 69;                     // distância entre ruas leste–oeste
+  const V_CAURE = -299;                      // R. Cauré (rua mais ao sul)
+  const SE_MODELO = { u: 467, v: -330 };     // canto sudeste do bairro
+  const LARGURA_MODELO = AVENIDAS_U[3] - AVENIDAS_U[0];
+  const U_MEIO_MODELO = (AVENIDAS_U[0] + AVENIDAS_U[3]) / 2;
+  // Medidas dos retângulos desenhados no PDF, em pixels.
+  const LOTE_LARG_PX = 11, LOTE_PROF_PX = 24, RUA_LARG_PX = 13;
+
+  const PADRAO = { rot: 1.9, esc: 100, lw: 10, ld: 21.5, rw: 11.5, norte: 15, dx: 0, dy: 0 };
+  const P = { ...PADRAO };
+  const CAMPOS = [
+    { chave: 'rot',   id: 'pRot',   saida: 'oRot',   un: '°',  dec: 1 },
+    { chave: 'esc',   id: 'pEsc',   saida: 'oEsc',   un: '%',  dec: 0 },
+    { chave: 'lw',    id: 'pLw',    saida: 'oLw',    un: ' m', dec: 1 },
+    { chave: 'ld',    id: 'pLd',    saida: 'oLd',    un: ' m', dec: 1 },
+    { chave: 'rw',    id: 'pRw',    saida: 'oRw',    un: ' m', dec: 1 },
+    { chave: 'norte', id: 'pNorte', saida: 'oNorte', un: '',   dec: 0 },
+    { chave: 'dx',    id: 'pDx',    saida: 'oDx',    un: ' m', dec: 0 },
+    { chave: 'dy',    id: 'pDy',    saida: 'oDy',    un: ' m', dec: 0 }
+  ];
+
+  /* ---------- Estado ---------- */
+  let limite = null;
+  let casas = [];
+  let grupos = [];          // {nome, hex, n}
+  let fonte = 'grade';      // 'grade' | 'osm' | 'arquivo'
+  let modoCor = 'grupo';    // 'grupo' | 'situacao'
+  let semente = 1;
+  let focos = null;
+  const camadas = { mascara: null, limite: null, casas: null, calor: null, rotulos: null };
+
+  const $ = (id) => document.getElementById(id);
+  function status(msg, erro = false) {
+    $('status').textContent = msg;
+    $('status').className = erro ? 'erro' : '';
+  }
+
+  /* ---------- Mapa ---------- */
+  const map = L.map('map', { preferCanvas: true }).setView([-2.4385, -54.6996], 13);
+
+  const base = {
+    // O CARTO passou a exigir chave e o OpenStreetMap bloqueia arquivos abertos via file://.
+    // Aberto por arquivo local, usa o mapa de ruas da Esri (sem chave). Servido por http(s)/localhost,
+    // usa os tiles do OpenStreetMap.
+    osm: location.protocol.startsWith('http')
+      ? L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; Colaboradores do <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        })
+      : L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+          maxZoom: 19,
+          attribution: 'Mapa &copy; Esri, HERE, Garmin, colaboradores do OpenStreetMap'
+        }),
+    sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: 'Imagens &copy; Esri, Maxar, Earthstar Geographics'
+    })
+  };
+  base.osm.addTo(map);
+
+  /* ---------- Limite do bairro ---------- */
+  async function buscarLimite(consulta) {
+    const url = `${NOMINATIM}?q=${encodeURIComponent(consulta)}&format=jsonv2&polygon_geojson=1&limit=5&accept-language=pt-BR`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Nominatim respondeu ${res.status}.`);
+    const dados = await res.json();
+
+    const poligono = dados.find((d) => d.geojson && /Polygon/.test(d.geojson.type));
+    if (poligono) {
+      return { type: 'Feature', properties: { origem: 'OpenStreetMap', nome: poligono.display_name }, geometry: poligono.geojson };
+    }
+    if (dados.length) {
+      const ponto = turf.point([parseFloat(dados[0].lon), parseFloat(dados[0].lat)]);
+      const area = turf.buffer(ponto, RAIO_APROXIMADO_KM, { units: 'kilometers' });
+      area.properties = { origem: 'aproximado' };
+      return area;
+    }
+    throw new Error('Nenhum resultado para essa busca.');
+  }
+
+  function extrairPoligono(gj) {
+    if (gj.type === 'FeatureCollection') {
+      const f = gj.features.find((x) => x.geometry && /Polygon/.test(x.geometry.type));
+      if (f) return f;
+    } else if (gj.type === 'Feature' && /Polygon/.test(gj.geometry.type)) {
+      return gj;
+    } else if (/Polygon/.test(gj.type)) {
+      return { type: 'Feature', properties: {}, geometry: gj };
+    }
+    throw new Error('O arquivo não contém um polígono.');
+  }
+
+  function aneisExternos(feature) {
+    const g = feature.geometry;
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+    return polys.map((p) => p[0].map(([x, y]) => [y, x]));
+  }
+
+  /* ---------- Edificações reais (OpenStreetMap via Overpass) ---------- */
+  async function buscarEdificacoes(feature) {
+    const [w, s, e, n] = turf.bbox(feature);
+    const consulta = `[out:json][timeout:30];(way["building"](${s},${w},${n},${e}););out geom;`;
+    const erros = [];
+
+    for (const endpoint of OVERPASS) {
+      const servidor = new URL(endpoint).hostname;
+      status(`Buscando edificações (${servidor})…`);
+      const controle = new AbortController();
+      const temporizador = setTimeout(() => controle.abort(), 35000);
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(consulta),
+          signal: controle.signal
+        });
+        if (!res.ok) throw new Error(`resposta ${res.status}`);
+        const json = await res.json();
+        if (json.remark && !json.elements.length) throw new Error(json.remark);
+        return json.elements.map(converterVia).filter(Boolean);
+      } catch (err) {
+        erros.push(`${servidor}: ${err.name === 'AbortError' ? 'tempo esgotado' : err.message}`);
+      } finally {
+        clearTimeout(temporizador);
+      }
+    }
+    throw new Error(erros.join(' | '));
+  }
+
+  function converterVia(el) {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 3) return null;
+    const anel = el.geometry.map((p) => [p.lon, p.lat]);
+    const a = anel[0], b = anel[anel.length - 1];
+    if (a[0] !== b[0] || a[1] !== b[1]) anel.push([a[0], a[1]]);
+    if (anel.length < 4) return null;
+    const tags = el.tags || {};
+    return {
+      type: 'Feature',
+      properties: {
+        id: `way/${el.id}`,
+        endereco: [tags['addr:street'], tags['addr:housenumber']].filter(Boolean).join(', ')
+      },
+      geometry: { type: 'Polygon', coordinates: [anel] }
+    };
+  }
+
+  function converterGeoJSON(gj) {
+    const itens = gj.type === 'FeatureCollection' ? gj.features : gj.type === 'Feature' ? [gj] : [];
+    const saida = [];
+    itens.forEach((f, i) => {
+      if (!f.geometry) return;
+      const polis = f.geometry.type === 'Polygon' ? [f.geometry.coordinates]
+        : f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates : [];
+      polis.forEach((coords, j) => {
+        const p = f.properties || {};
+        const id = p.osmid ?? p.osm_id ?? p.id ?? f.id ?? `arquivo/${i}${j ? '-' + j : ''}`;
+        saida.push({
+          type: 'Feature',
+          properties: {
+            id: String(id),
+            endereco: [p['addr:street'], p['addr:housenumber']].filter(Boolean).join(', ')
+          },
+          geometry: { type: 'Polygon', coordinates: coords }
+        });
+      });
+    });
+    return saida;
+  }
+
+  /* ---------- Modelo de quadras (casas simuladas) ---------- */
+  function referencia() {
+    const [w, s, e, n] = turf.bbox(limite);
+    const lat0 = (s + n) / 2;
+    return { w, s, e, n, lat0, lng0: (w + e) / 2, mLat: 111320, mLng: 111320 * Math.cos((lat0 * Math.PI) / 180) };
+  }
+
+  /* Ajusta o modelo ao bairro: os cantos sudoeste e sudeste do polígono correspondem
+     às avenidas Gavião Real e Pirelli, o que fixa a escala e a posição. */
+  function calibrar(r, th) {
+    const c = Math.cos(th), sn = Math.sin(th);
+    let se = null, sw = null, pontuacaoSE = -Infinity, pontuacaoSW = -Infinity;
+    for (const [lat, lng] of aneisExternos(limite).flat()) {
+      const wx = (lng - r.lng0) * r.mLng, wy = (lat - r.lat0) * r.mLat;
+      const lu = wx * c + wy * sn, lv = -wx * sn + wy * c;
+      if (lu - lv > pontuacaoSE) { pontuacaoSE = lu - lv; se = [lu, lv]; }
+      if (-lu - lv > pontuacaoSW) { pontuacaoSW = -lu - lv; sw = [lu, lv]; }
+    }
+    let escala = (se[0] - sw[0]) / LARGURA_MODELO;
+    if (!isFinite(escala) || escala < 0.3 || escala > 3) escala = 0.9;
+    return {
+      escala,
+      origemU: (se[0] + sw[0]) / 2 - U_MEIO_MODELO * escala,
+      origemV: se[1] - SE_MODELO.v * escala
+    };
+  }
+
+  function definirPadroesPorEscala(escala) {
+    const cl = (v, min, max) => Math.min(max, Math.max(min, v));
+    PADRAO.lw = cl(Math.round(LOTE_LARG_PX * escala * 10) / 10, 5, 20);
+    PADRAO.ld = cl(Math.round(LOTE_PROF_PX * escala * 2) / 2, 10, 40);
+    PADRAO.rw = cl(Math.round(RUA_LARG_PX * escala * 2) / 2, 6, 25);
+    Object.assign(P, PADRAO);
+  }
+
+  function gerarQuadras() {
+    const r = referencia();
+    const th = (P.rot * Math.PI) / 180;
+    const cos = Math.cos(th), sin = Math.sin(th);
+    const cal = calibrar(r, th);
+    const s = cal.escala * (P.esc / 100);
+
+    const paraGeo = (lu, lv) => {
+      const u = lu + P.dx, v = lv + P.dy;
+      return [r.lng0 + (u * cos - v * sin) / r.mLng, r.lat0 + (u * sin + v * cos) / r.mLat];
+    };
+    const dentro = (c) => c[0] >= r.w && c[0] <= r.e && c[1] >= r.s && c[1] <= r.n
+      && turf.booleanPointInPolygon(c, limite);
+
+    const meiaRua = P.rw / 2;
+    const folga = 0.4; // espaço visual entre retângulos vizinhos, em metros
+    const lotes = [];
+    const listaGrupos = [];
+    let numeroQuadra = 0;
+    let excedeu = false;
+
+    // Norte para sul e oeste para leste, para numerar as quadras de forma previsível.
+    for (let j = P.norte - 1; j >= -1 && !excedeu; j--) {
+      const vRuaSul = cal.origemV + (V_CAURE + PASSO_RUAS * j) * s;
+      const vRuaNorte = cal.origemV + (V_CAURE + PASSO_RUAS * (j + 1)) * s;
+      const vB = vRuaSul + meiaRua, vT = vRuaNorte - meiaRua;
+      const prof = vT - vB;
+      if (prof <= 0) continue;
+      const profLote = Math.min(P.ld, prof / 2);
+
+      for (let c = 0; c < AVENIDAS_U.length - 1 && !excedeu; c++) {
+        const uL = cal.origemU + AVENIDAS_U[c] * s + meiaRua;
+        const uR = cal.origemU + AVENIDAS_U[c + 1] * s - meiaRua;
+        const n = Math.floor((uR - uL) / P.lw);
+        if (n < 1) continue;
+        const inicio = uL + ((uR - uL) - n * P.lw) / 2;
+
+        const doGrupo = [];
+        [vT - profLote, vB].forEach((v0) => {          // fileira norte, depois fileira sul
+          for (let k = 0; k < n; k++) {
+            const u0 = inicio + k * P.lw;
+            const cantos = [
+              [u0 + folga, v0 + folga], [u0 + P.lw - folga, v0 + folga],
+              [u0 + P.lw - folga, v0 + profLote - folga], [u0 + folga, v0 + profLote - folga]
+            ].map(([u, v]) => paraGeo(u, v));
+            const centro = paraGeo(u0 + P.lw / 2, v0 + profLote / 2);
+            if (dentro(centro) && cantos.every(dentro)) doGrupo.push(cantos);
+          }
+        });
+        if (!doGrupo.length) continue;
+
+        numeroQuadra++;
+        const idx = (((2 * c + 3 * (j + 1)) % PALETA.length) + PALETA.length) % PALETA.length;
+        const nomeGrupo = `Q${String(numeroQuadra).padStart(2, '0')}`;
+        const centroGrupo = paraGeo((uL + uR) / 2, (vB + vT) / 2);
+        listaGrupos.push({ nome: nomeGrupo, hex: PALETA[idx].hex, cor: PALETA[idx].nome, n: doGrupo.length, lon: centroGrupo[0], lat: centroGrupo[1] });
+
+        doGrupo.forEach((cantos, k) => {
+          const rotuloL = String(k + 1).padStart(3, '0');
+          lotes.push({
+            type: 'Feature',
+            properties: {
+              id: `${nomeGrupo}-L${rotuloL}`,
+              grupo: nomeGrupo,
+              cor_grupo: PALETA[idx].hex,
+              quadra: numeroQuadra,
+              lote: k + 1,
+              endereco: `Quadra ${String(numeroQuadra).padStart(2, '0')}, lote ${rotuloL} (simulado)`
+            },
+            geometry: { type: 'Polygon', coordinates: [[...cantos, cantos[0]]] }
+          });
+        });
+        if (lotes.length > LIMITE_CASAS) excedeu = true;
+      }
+    }
+    if (excedeu) throw new Error(`mais de ${LIMITE_CASAS} casas. Aumente o tamanho do lote ou reduza as fileiras de quadras.`);
+    return { casas: lotes, grupos: listaGrupos };
+  }
+
+  /* ---------- Simulação da cobertura ---------- */
+  function classificar(dias) {
+    return dias <= 90 ? 'coberta' : dias <= 180 ? 'atencao' : 'descoberta';
+  }
+
+  // Sorteio determinístico por endereço: a situação não muda ao ajustar o modelo.
+  function aleatorio(chave) {
+    let h = 2166136261 ^ semente;
+    for (let i = 0; i < chave.length; i++) {
+      h ^= chave.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    h ^= h >>> 13;
+    h = Math.imul(h, 0x5bd1e995);
+    h ^= h >>> 15;
+    return (h >>> 0) / 4294967296;
+  }
+
+  function sortearFocos() {
+    const [w, s, e, n] = turf.bbox(limite);
+    focos = [];
+    for (let t = 0; t < 500 && focos.length < 3; t++) {
+      const c = [w + Math.random() * (e - w), s + Math.random() * (n - s)];
+      if (turf.booleanPointInPolygon(c, limite)) focos.push(turf.point(c));
+    }
+  }
+
+  function simular() {
+    if (!casas.length) return;
+    if (!focos) sortearFocos();
+
+    casas.forEach((f) => {
+      const c = turf.centroid(f).geometry.coordinates;
+      f.properties.lon = c[0];
+      f.properties.lat = c[1];
+
+      const dist = focos.length
+        ? Math.min(...focos.map((fo) => turf.distance(c, fo, { units: 'kilometers' })))
+        : 9;
+      const pDescoberta = 0.9 * Math.exp(-dist / 0.18);
+      const r = aleatorio(f.properties.id + 'a');
+      const q = aleatorio(f.properties.id + 'b');
+      let dias;
+      if (r < pDescoberta) dias = 181 + q * 300;
+      else if (r < pDescoberta + 0.15) dias = 91 + q * 89;
+      else dias = q * 90;
+      f.properties.dias_sem_visita = Math.round(dias);
+      f.properties.situacao = classificar(f.properties.dias_sem_visita);
+    });
+  }
+
+  /* ---------- Desenho ---------- */
+  function corDaCasa(f) {
+    return modoCor === 'grupo' && f.properties.cor_grupo ? f.properties.cor_grupo : COR[f.properties.situacao];
+  }
+
+  function desenharLimite() {
+    ['mascara', 'limite'].forEach((k) => { if (camadas[k]) map.removeLayer(camadas[k]); });
+
+    const mundo = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+    camadas.mascara = L.polygon([mundo, ...aneisExternos(limite)], {
+      stroke: false, fillColor: '#17303a', fillOpacity: 0.45, interactive: false
+    }).addTo(map);
+
+    camadas.limite = L.geoJSON(limite, {
+      style: { color: '#17303a', weight: 2.5, fill: false },
+      interactive: false
+    }).addTo(map);
+
+    const limites = camadas.limite.getBounds();
+    map.setMaxBounds(null);
+    map.fitBounds(limites, { padding: [24, 24] });
+    map.setMinZoom(map.getBoundsZoom(limites) - 1);
+    map.setMaxBounds(limites.pad(0.2));
+  }
+
+  function conteudoPopup(layer) {
+    const p = layer.feature.properties;
+    const caixa = document.createElement('div');
+    caixa.className = 'popup';
+
+    const linhas = [['Identificador', p.id]];
+    if (p.grupo) linhas.push(['Grupo', p.grupo]);
+    linhas.push(
+      ['Endereço', p.endereco || 'não informado'],
+      ['Situação', ROTULO[p.situacao]],
+      ['Dias desde a última visita', String(p.dias_sem_visita)]
+    );
+    linhas.forEach(([k, v]) => {
+      const linha = document.createElement('div');
+      const rotulo = document.createElement('b');
+      rotulo.textContent = k + ': ';
+      linha.append(rotulo, document.createTextNode(v));
+      caixa.append(linha);
+    });
+
+    const cobrir = p.situacao !== 'coberta';
+    const botao = document.createElement('button');
+    botao.type = 'button';
+    botao.textContent = cobrir ? 'Registrar visita (simulação)' : 'Marcar como descoberta (simulação)';
+    botao.addEventListener('click', () => {
+      p.dias_sem_visita = cobrir ? 0 : 365;
+      p.situacao = classificar(p.dias_sem_visita);
+      layer.setStyle({ fillColor: corDaCasa(layer.feature) });
+      layer.closePopup();
+      atualizarCalorEEstatisticas();
+    });
+    caixa.append(botao);
+    return caixa;
+  }
+
+  function estiloCasa(f) {
+    return { color: '#1f2d33', weight: 0.5, fillColor: corDaCasa(f), fillOpacity: 0.92 };
+  }
+
+  function desenharCasas() {
+    if (camadas.casas) map.removeLayer(camadas.casas);
+    camadas.casas = L.geoJSON(casas, {
+      style: estiloCasa,
+      onEachFeature: (f, layer) => layer.bindPopup(() => conteudoPopup(layer))
+    });
+    if ($('chkCasas').checked) camadas.casas.addTo(map);
+  }
+
+  function atualizarCalor() {
+    if (camadas.calor) map.removeLayer(camadas.calor);
+    const pontos = [];
+    casas.forEach((f) => {
+      const peso = f.properties.situacao === 'descoberta' ? 1 : f.properties.situacao === 'atencao' ? 0.4 : 0;
+      if (peso > 0) pontos.push([f.properties.lat, f.properties.lon, peso]);
+    });
+    camadas.calor = L.heatLayer(pontos, {
+      radius: 30, blur: 24, maxZoom: 17, minOpacity: 0.3,
+      gradient: { 0.2: '#ffd166', 0.55: '#f4845f', 1.0: '#b3261e' }
+    });
+    if ($('chkCalor').checked) camadas.calor.addTo(map);
+  }
+
+  function atualizarEstatisticas() {
+    const n = { coberta: 0, atencao: 0, descoberta: 0 };
+    casas.forEach((f) => { n[f.properties.situacao]++; });
+    const total = casas.length || 1;
+    $('nCoberta').textContent = casas.length ? n.coberta : '—';
+    $('nAtencao').textContent = casas.length ? n.atencao : '—';
+    $('nDescoberta').textContent = casas.length ? n.descoberta : '—';
+    $('nTotal').textContent = casas.length || '—';
+    $('barra').innerHTML = '';
+    ['coberta', 'atencao', 'descoberta'].forEach((k) => {
+      const seg = document.createElement('span');
+      seg.style.width = `${(n[k] / total) * 100}%`;
+      seg.style.background = COR[k];
+      $('barra').append(seg);
+    });
+  }
+
+  function atualizarCalorEEstatisticas() {
+    atualizarCalor();
+    atualizarEstatisticas();
+  }
+
+  /* ---------- Grupos (verificação) ---------- */
+  function desenharTabelaGrupos() {
+    const caixa = $('tabelaGrupos');
+    caixa.innerHTML = '';
+    if (!grupos.length) return;
+
+    const tabela = document.createElement('table');
+    tabela.innerHTML = '<thead><tr><th>Grupo</th><th>Casas</th></tr></thead>';
+    const corpo = document.createElement('tbody');
+    grupos.forEach((g) => {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      const amostra = document.createElement('span');
+      amostra.className = 'cor';
+      amostra.style.background = g.hex;
+      td1.append(amostra, document.createTextNode(`${g.nome} · ${g.cor}`));
+      const td2 = document.createElement('td');
+      td2.textContent = g.n;
+      tr.append(td1, td2);
+      corpo.append(tr);
+    });
+    const rodape = document.createElement('tfoot');
+    rodape.innerHTML = `<tr><td>Total</td><td>${grupos.reduce((a, g) => a + g.n, 0)}</td></tr>`;
+    tabela.append(corpo, rodape);
+    caixa.append(tabela);
+  }
+
+  function desenharRotulos() {
+    if (camadas.rotulos) { map.removeLayer(camadas.rotulos); camadas.rotulos = null; }
+    if (!grupos.length) return;
+    camadas.rotulos = L.layerGroup(grupos.map((g) => L.marker([g.lat, g.lon], {
+      interactive: false,
+      keyboard: false,
+      icon: L.divIcon({ className: 'rotulo-grupo', html: `<span>${g.nome}</span>`, iconSize: [34, 16] })
+    })));
+    atualizarRotulos();
+  }
+
+  function atualizarRotulos() {
+    if (!camadas.rotulos) return;
+    const mostrar = fonte === 'grade' && map.getZoom() >= 16;
+    if (mostrar) camadas.rotulos.addTo(map); else map.removeLayer(camadas.rotulos);
+  }
+  map.on('zoomend', atualizarRotulos);
+
+  function limparCasas() {
+    casas = [];
+    grupos = [];
+    ['casas', 'calor', 'rotulos'].forEach((k) => { if (camadas[k]) { map.removeLayer(camadas[k]); camadas[k] = null; } });
+    desenharTabelaGrupos();
+    atualizarEstatisticas();
+  }
+
+  /* ---------- Fluxo principal ---------- */
+  const NOME_FONTE = { grade: 'modelo de quadras', osm: 'OpenStreetMap', arquivo: 'arquivo GeoJSON' };
+
+  function definirFonte(nova) {
+    fonte = nova;
+    $('fonteAtual').textContent = NOME_FONTE[nova];
+    $('painelGrade').hidden = nova !== 'grade';
+    $('painelGrupos').hidden = nova !== 'grade';
+  }
+
+  function aplicarCasas(feats, novaFonte, listaGrupos = [], filtrar = true) {
+    const lista = filtrar
+      ? feats.filter((f) => turf.booleanPointInPolygon(turf.centroid(f), limite))
+      : feats;
+
+    if (!lista.length) {
+      status('Nenhuma edificação encontrada dentro do limite.', true);
+      return false;
+    }
+    casas = lista;
+    grupos = listaGrupos;
+    definirFonte(novaFonte);
+    simular();
+    desenharCasas();
+    desenharTabelaGrupos();
+    desenharRotulos();
+    atualizarCalorEEstatisticas();
+    return true;
+  }
+
+  function usarModelo() {
+    if (!limite) return;
+    try {
+      const { casas: lotes, grupos: gr } = gerarQuadras();
+      if (aplicarCasas(lotes, 'grade', gr, false)) {
+        const aviso = limite.properties && limite.properties.origem === 'aproximado'
+          ? ' O limite é aproximado (círculo); o modelo pode não se ajustar ao bairro.'
+          : '';
+        status(`${lotes.length} casas em ${gr.length} grupos (simulado). Compare com o mapa e ajuste se necessário.${aviso}`);
+      } else {
+        status('Nenhuma casa coube dentro do limite com estes ajustes.', true);
+      }
+    } catch (err) {
+      status(`Não foi possível gerar o modelo: ${err.message}`, true);
+    }
+  }
+
+  async function carregarBairro(feature) {
+    limite = feature;
+    limparCasas();
+    desenharLimite();
+    const r = referencia();
+    definirPadroesPorEscala(calibrar(r, (PADRAO.rot * Math.PI) / 180).escala);
+    sincronizarCampos();
+    usarModelo();
+  }
+
+  async function iniciar(consulta) {
+    try {
+      status('Buscando o limite do bairro…');
+      await carregarBairro(await buscarLimite(consulta));
+    } catch (err) {
+      status(`Não foi possível carregar o bairro: ${err.message} Ajuste a busca ou carregue um arquivo GeoJSON com o limite.`, true);
+    }
+  }
+
+  /* ---------- Controles do modelo ---------- */
+  function sincronizarCampos() {
+    CAMPOS.forEach((c) => {
+      $(c.id).value = P[c.chave];
+      $(c.saida).textContent = Number(P[c.chave]).toFixed(c.dec) + c.un;
+    });
+  }
+
+  let temporizadorModelo = null;
+  CAMPOS.forEach((c) => {
+    $(c.id).addEventListener('input', (e) => {
+      P[c.chave] = parseFloat(e.target.value);
+      $(c.saida).textContent = P[c.chave].toFixed(c.dec) + c.un;
+      clearTimeout(temporizadorModelo);
+      temporizadorModelo = setTimeout(() => { if (fonte === 'grade') usarModelo(); }, 150);
+    });
+  });
+
+  $('btnRedefinir').addEventListener('click', () => {
+    Object.assign(P, PADRAO);
+    sincronizarCampos();
+    usarModelo();
+  });
+
+  /* ---------- Eventos ---------- */
+  $('btnBuscar').addEventListener('click', () => iniciar($('consulta').value.trim()));
+  $('btnGrade').addEventListener('click', () => usarModelo());
+
+  $('btnOSM').addEventListener('click', async () => {
+    if (!limite) { status('Carregue primeiro o limite do bairro.', true); return; }
+    try {
+      const todas = await buscarEdificacoes(limite);
+      if (aplicarCasas(todas, 'osm')) status(`${casas.length} edificações carregadas do OpenStreetMap.`);
+    } catch (err) {
+      status(`Não foi possível obter as edificações do OpenStreetMap (${err.message}). O modelo de quadras continua disponível.`, true);
+    }
+  });
+
+  $('arquivoLimite').addEventListener('change', async (e) => {
+    const arquivo = e.target.files[0];
+    if (!arquivo) return;
+    try {
+      const gj = JSON.parse(await arquivo.text());
+      await carregarBairro(extrairPoligono(gj));
+    } catch (err) {
+      status(`Arquivo inválido: ${err.message}`, true);
+    }
+    e.target.value = '';
+  });
+
+  $('arquivoCasas').addEventListener('change', async (e) => {
+    const arquivo = e.target.files[0];
+    if (!arquivo) return;
+    try {
+      if (!limite) throw new Error('carregue primeiro o limite do bairro.');
+      const gj = JSON.parse(await arquivo.text());
+      const feats = converterGeoJSON(gj);
+      if (!feats.length) throw new Error('nenhum polígono de edificação encontrado.');
+      if (aplicarCasas(feats, 'arquivo')) status(`${casas.length} edificações carregadas do arquivo.`);
+    } catch (err) {
+      status(`Arquivo de edificações inválido: ${err.message}`, true);
+    }
+    e.target.value = '';
+  });
+
+  document.querySelectorAll('input[name="modoCor"]').forEach((r) => {
+    r.addEventListener('change', (e) => {
+      modoCor = e.target.value;
+      if (camadas.casas) camadas.casas.setStyle(estiloCasa);
+    });
+  });
+
+  $('chkCasas').addEventListener('change', (e) => {
+    if (!camadas.casas) return;
+    e.target.checked ? camadas.casas.addTo(map) : map.removeLayer(camadas.casas);
+  });
+
+  $('chkCalor').addEventListener('change', (e) => {
+    if (!camadas.calor) return;
+    e.target.checked ? camadas.calor.addTo(map) : map.removeLayer(camadas.calor);
+  });
+
+  document.querySelectorAll('input[name="base"]').forEach((r) => {
+    r.addEventListener('change', (e) => {
+      const nova = e.target.value;
+      Object.entries(base).forEach(([k, l]) => (k === nova ? l.addTo(map) : map.removeLayer(l)));
+    });
+  });
+
+  $('btnSimular').addEventListener('click', () => {
+    if (!casas.length) return;
+    semente = (Math.random() * 4294967296) >>> 0;
+    focos = null;
+    simular();
+    desenharCasas();
+    atualizarCalorEEstatisticas();
+    status('Nova simulação de cobertura gerada.');
+  });
+
+  $('btnExportar').addEventListener('click', () => {
+    if (!casas.length) return;
+    const fc = { type: 'FeatureCollection', features: casas };
+    const blob = new Blob([JSON.stringify(fc)], { type: 'application/geo+json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'casas_salvacao_simulado.geojson';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  definirFonte('grade');
+  sincronizarCampos();
+  iniciar($('consulta').value.trim());
+})();
+</script>
+</body>
+</html>
