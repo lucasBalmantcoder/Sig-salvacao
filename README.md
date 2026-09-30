@@ -42,3 +42,5 @@ CNEFE 2022 — Cadastro Nacional de Endereços para Fins Estatísticos, IBGE.
 Arquivo `qg_810_endereco_Munic1506807.json` (Santarém/PA),
 localidade `RESIDENCIAL SALVACAO`.
 https://www.ibge.gov.br/estatisticas/sociais/populacao/22827-censo-demografico-2022.html
+
+verificar os pontos faltando em outro momento;
