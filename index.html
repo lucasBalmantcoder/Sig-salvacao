@@ -9,6 +9,26 @@
 <link rel="preconnect" href="https://api.fontshare.com">
 <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=jetbrains-mono@400,500&display=swap">
 <style>
+.btn-indicador {
+  background-color: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #333;
+}
+.btn-indicador.ativo {
+  background-color: #eef6f5;
+  border-color: #0f766e;
+  font-weight: 700;
+}
+.btn-indicador:hover {
+  background-color: #f0f0f0;
+  border-color: #bbb;
+}
 :root{
   --text-xs:clamp(.75rem,.72rem+.15vw,.8125rem);
   --text-sm:clamp(.8125rem,.8rem+.2vw,.9375rem);
@@ -281,11 +301,42 @@ hr{border:0;border-top:1px solid var(--border)}
 
       <div class="grupo">
         <h2>Cor das casas</h2>
+
+
+
         <div class="seg" id="segCor" role="group" aria-label="Critério de cor">
           <button data-v="quadra" aria-pressed="true">Quarteirão</button>
           <button data-v="face" aria-pressed="false">Face</button>
           <button data-v="rua" aria-pressed="false">Rua</button>
         </div>
+	<!-- NOVA SEÇÃO: INDICADORES DE SAÚDE -->
+<div class="secao-filtros" style="margin-top: 30px;">
+  <p style="font-size: 11px; font-weight: bold; color: #888; text-transform: uppercase; margin-bottom: 10px;">Indicadores de Saúde (Protótipo)</p>
+  
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <!-- Cada botão chama a função aplicarIndicador passando o nome e a cor -->
+    <button class="btn-indicador" data-ind="hiperdia" onclick="aplicarIndicador('hiperdia', '#800080')">🟣 Hiperdia</button>
+    <button class="btn-indicador" data-ind="recem_nascida" onclick="aplicarIndicador('recem_nascida', '#FFB6C1')">🌸 Criança recém-nascida</button>
+    <button class="btn-indicador" data-ind="saude_mental" onclick="aplicarIndicador('saude_mental', '#FFD700')">🟡 Saúde mental</button>
+    <button class="btn-indicador" data-ind="hipertensao" onclick="aplicarIndicador('hipertensao', '#FF0000')">🔴 Hipertensão arterial</button>
+    <button class="btn-indicador" data-ind="acamados" onclick="aplicarIndicador('acamados', '#696969')">⚫ Acamados</button>
+    <button class="btn-indicador" data-ind="tuberculose" onclick="aplicarIndicador('tuberculose', '#8B4513')">🟤 Tuberculose</button>
+    <button class="btn-indicador" data-ind="gestantes" onclick="aplicarIndicador('gestantes', '#FFA500')">🟠 Gestantes</button>
+    <button class="btn-indicador" data-ind="menor_2_anos" onclick="aplicarIndicador('menor_2_anos', '#87CEFA')">🔵 Criança &lt; 2 anos</button>
+    
+    <!-- Botão Bolsa Família com Tooltip explicando a regra -->
+    <button class="btn-indicador" data-ind="bolsa_familia" title="Famílias que precisam ter peso, altura e vacinas acompanhados semestralmente" onclick="aplicarIndicador('bolsa_familia', '#228B22')">
+      🟢 Bolsa Família (Pesagem)
+    </button>
+    
+    <button class="btn-indicador" data-ind="idosos" onclick="aplicarIndicador('idosos', '#00008B')">🧿 Idosos 60+</button>
+    <button class="btn-indicador" data-ind="risco_sanitario" onclick="aplicarIndicador('risco_sanitario', '#000000')">⬛ Risco epidem. e sanitário</button>
+    <button class="btn-indicador" data-ind="vacina_atrasada" onclick="aplicarIndicador('vacina_atrasada', '#8B0000')">🩸 Vacina atrasada</button>
+    
+    <hr style="border: 0; border-top: 1px solid #eee; margin: 5px 0;">
+    <button class="btn-indicador" onclick="limparIndicadores()" style="background: #f4f4f4;">❌ Limpar Filtro / Voltar ao Normal</button>
+  </div>
+</div>
         <div id="legenda"></div>
       </div>
 
@@ -403,7 +454,7 @@ const COR_OUTROS = () => temaEscuro ? 'oklch(72% .015 160)' : 'oklch(52% .012 16
 const traco = () => temaEscuro ? 'oklch(14% .01 160/.85)' : 'oklch(20% .015 160/.7)';
 
 /* ============ Estado ============ */
-const E = { casas:[], outros:[], quadras:[], ruas:[], criterio:'quadra', posicao:'real', selec:null, opac:.8, dados:null };
+const E = { casas:[], outros:[], quadras:[], ruas:[], criterio:'quadra', posicao:'real', selec:null, opac:.8, dados:null, indicador:null };
 let cCasas=null, cPontos=null, cOutros=null, cContorno=null, cRotulos=null, cRealce=null;
 
 const st = (msg) => { $('status').innerHTML = msg; };
@@ -452,6 +503,7 @@ function montar(gj){
     delete f.properties.anel_uniforme;
   }
   E.outros = gj.features.filter(f => f.properties.tipo !== 'domicilio');
+  for (const f of E.casas) f.properties.indicadores_mock = gerarIndicadoresMock(f);
 
   // agrupa por quadra
   const mapaQ = new Map();
@@ -509,6 +561,14 @@ function indiceCor(p){
 function estilo(f){
   const p = f.properties;
   const selecionada = E.selec === null || p._qi === E.selec;
+  // Modo indicador: só as casas com o indicador ficam coloridas; as demais ficam apagadas
+  if (E.indicador){
+    const tem = (p.indicadores_mock || []).includes(E.indicador.nome);
+    if (tem) return { color: E.indicador.cor, weight: 1.2, opacity: selecionada ? 1 : .3,
+                      fillColor: E.indicador.cor, fillOpacity: selecionada ? .95 : .25 };
+    return { color: '#cccccc', weight: .5, opacity: selecionada ? .5 : .15,
+             fillColor: '#e0e0e0', fillOpacity: selecionada ? .25 : .05 };
+  }
   return {
     color: traco(),
     weight: 0.7,
@@ -517,6 +577,52 @@ function estilo(f){
     fillOpacity: selecionada ? E.opac : E.opac * 0.16
   };
 }
+
+/* ============ Indicadores de saúde (protótipo) ============ */
+const TODOS_INDICADORES = ['hiperdia','recem_nascida','saude_mental','hipertensao','acamados','tuberculose',
+  'gestantes','menor_2_anos','bolsa_familia','idosos','risco_sanitario','vacina_atrasada'];
+const NOMES_INDICADORES = { hiperdia:'Hiperdia', recem_nascida:'Criança recém-nascida', saude_mental:'Saúde mental',
+  hipertensao:'Hipertensão arterial', acamados:'Acamados', tuberculose:'Tuberculose', gestantes:'Gestantes',
+  menor_2_anos:'Criança < 2 anos', bolsa_familia:'Bolsa Família', idosos:'Idosos 60+',
+  risco_sanitario:'Risco epidem. e sanitário', vacina_atrasada:'Vacina atrasada' };
+
+// Dados FICTÍCIOS (protótipo): 15% de chance por indicador. Determinístico por casa+indicador,
+// então o resultado é o mesmo a cada recarga da página.
+function hash01(s){
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+function gerarIndicadoresMock(f){
+  return TODOS_INDICADORES.filter(ind => hash01(f.properties.id + '|' + ind) < 0.15);
+}
+
+function marcarBotaoIndicador(nome){
+  document.querySelectorAll('.btn-indicador[data-ind]').forEach(b =>
+    b.classList.toggle('ativo', b.dataset.ind === nome));
+}
+
+// Chamada pelos botões do menu (onclick no HTML) — por isso é exposta em window
+window.aplicarIndicador = function(nome, cor){
+  if (!cCasas) return; // mapa ainda não carregou
+  // clicar de novo no mesmo indicador desliga o filtro
+  if (E.indicador && E.indicador.nome === nome){ window.limparIndicadores(); return; }
+  E.indicador = { nome, cor };
+  marcarBotaoIndicador(nome);
+  pintar();
+  // casas destacadas por cima das apagadas
+  cCasas.eachLayer(l => { if ((l.feature.properties.indicadores_mock || []).includes(nome)) l.bringToFront(); });
+  const n = E.casas.filter(f => f.properties.indicadores_mock.includes(nome)).length;
+  st(`<b>${NOMES_INDICADORES[nome]}</b> — <b>${n}</b> casas com este indicador (dados fictícios de protótipo).`);
+};
+
+window.limparIndicadores = function(){
+  E.indicador = null;
+  marcarBotaoIndicador(null);
+  pintar();
+  st(`<b>${E.casas.length.toLocaleString('pt-BR')}</b> casas em ${E.quadras.length} quarteirões.`);
+};
 
 /* ============ Desenho ============ */
 function desenhar(){
@@ -606,6 +712,7 @@ function popupCasa(p){
       <dt>Quadra IBGE</dt><dd>${p.quadra}</dd>
       <dt>Coordenada</dt><dd>${p.lat_original.toFixed(6)}, ${p.lng_original.toFixed(6)}</dd>
     </dl>
+    ${(p.indicadores_mock||[]).length ? `<div class="sub" style="margin-top:var(--space-3);margin-bottom:0">Indicadores (fictício): ${p.indicadores_mock.map(i=>NOMES_INDICADORES[i]).join(', ')}</div>` : ''}
     <span class="tag">${E.posicao === 'uniforme'
       ? 'Desenho em lotes iguais ao longo da face'
       : p.coord_ajustada
