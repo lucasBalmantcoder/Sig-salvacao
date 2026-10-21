@@ -91,6 +91,23 @@
                 padding: 2px 6px;
                 font-size: 11px;
             }
+            .banner-preview-quarteirao {
+                position: absolute;
+                top: 16px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 1005;
+                background: var(--surface);
+                border: 2px solid var(--accent);
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+                border-radius: 8px;
+                padding: 8px 16px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 13px;
+                font-weight: 500;
+            }
             .alca-rotacao-icone {
                 width: 24px;
                 height: 24px;
@@ -1029,6 +1046,7 @@
                             <button class="btn" id="btnAgrupar" style="flex: 1;" disabled title="Agrupa 2 ou mais casas selecionadas">🔗 Agrupar</button>
                             <button class="btn" id="btnDesagrupar" style="flex: 1;" disabled title="Desfaz o grupo das casas selecionadas">⛓️‍💥 Desagrupar</button>
                         </div>
+                        <button class="btn" id="btnQuarteirao" style="width: 100%; font-weight: 600;" disabled title="Organiza as casas selecionadas em quarteirão padronizado de duas fileiras paralelas">🏘️ Agrupar em quarteirão</button>
                         <div style="display: flex; gap: 6px;">
                             <button class="btn" id="btnDesfazer" style="flex: 1;" disabled title="Ctrl+Z">↩ Desfazer</button>
                             <button class="btn" id="btnRefazer" style="flex: 1;" disabled title="Ctrl+Y">↪ Refazer</button>
@@ -1044,6 +1062,7 @@
                             </div>
                             <div id="menuRestaurar" style="display: none; flex-direction: column; gap: 4px; background: var(--surface); padding: 8px; border-radius: 6px; border: 1px solid var(--border-strong);">
                                 <button class="btn" id="btnRestaurarSel" style="font-size: 12px; padding: 4px 6px; text-align: left;">↺ Restaurar selecionadas</button>
+                                <button class="btn" id="btnRestaurarQuarteirao" style="font-size: 12px; padding: 4px 6px; text-align: left;">🏘️ Restaurar quarteirão da seleção</button>
                                 <button class="btn" id="btnRestaurarTodas" style="font-size: 12px; padding: 4px 6px; text-align: left; color: var(--warn);">⚠️ Restaurar todas ao original</button>
                             </div>
                         </div>
@@ -1086,17 +1105,15 @@
                             role="group"
                             aria-label="Posição das casas"
                         >
-                            <button data-v="real" aria-pressed="true">
+                            <button data-v="real" aria-pressed="false">
                                 Coordenada real
                             </button>
-                            <button data-v="uniforme" aria-pressed="false">
+                            <button data-v="uniforme" aria-pressed="true">
                                 Lotes iguais
                             </button>
                         </div>
                         <p class="nota" id="notaPos">
-                            Cada casa no ponto exato levantado pelo IBGE. Vãos
-                            na fileira são lotes sem domicílio cadastrado — não
-                            são casas faltando.
+                            Cada face dividida em lotes de largura igual, no tamanho e alinhamento padronizados.
                         </p>
                     </div>
 
@@ -1423,6 +1440,13 @@
                     <div id="map"></div>
                     <div id="marqueeBox" class="marcador-selecao-box" style="display: none;"></div>
                     <div id="barraFlutuanteSelecao" class="barra-flutuante-selecao" style="display: none;"></div>
+                    <div id="bannerPreviewQuarteirao" class="banner-preview-quarteirao" style="display: none;">
+                        <span id="previewQuarteiraoTexto">Pré-visualização do Quarteirão Padronizado</span>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn primario" id="btnConfirmarQuarteirao" style="padding: 4px 10px; font-weight: 700;">✓ Confirmar</button>
+                            <button class="btn" id="btnCancelarQuarteirao" style="padding: 4px 10px;">✕ Cancelar</button>
+                        </div>
+                    </div>
                     <div class="painel-flutuante" id="dica">
                         Clique em uma casa para ver endereço, quadra, face e
                         ordem na face.
@@ -1472,6 +1496,12 @@
             (() => {
                 "use strict";
                 const $ = (id) => document.getElementById(id);
+
+                // ============ Parâmetros Configuráveis de Padronização (em metros) ============
+                const PADRAO_LARGURA_M = 8.0;           // Largura uniforme de cada lote (frente da casa)
+                const PADRAO_PROFUNDIDADE_M = 16.0;      // Profundidade uniforme de cada lote
+                const PADRAO_ESPACAMENTO_M = 1.0;        // Espaçamento uniforme entre lotes vizinhos na mesma fileira
+                const PADRAO_INTERVALO_FILEIRAS_M = 3.0; // Intervalo (afastamento) uniforme entre as duas fileiras da quadra
 
                 /* ============ Tema ============ */
                 const ICO = {
@@ -1577,7 +1607,7 @@
                     quadras: [],
                     ruas: [],
                     criterio: "quadra",
-                    posicao: "real",
+                    posicao: "uniforme",
                     selec: null,
                     opac: 0.8,
                     dados: null,
@@ -1677,12 +1707,17 @@
                     E.casas = gj.features.filter(
                         (f) => f.properties.tipo === "domicilio",
                     );
-                    // guarda os dois desenhos possiveis de cada casa
+                    // Prepara geometrias padronizadas e preserva atributos intactos do IBGE
                     for (const f of E.casas) {
-                        f.properties._anelReal = f.geometry.coordinates[0];
-                        f.properties._anelRealOrig = JSON.parse(JSON.stringify(f.geometry.coordinates[0]));
-                        f.properties._anelUni = f.properties.anel_uniforme;
-                        delete f.properties.anel_uniforme;
+                        const anelIBGE = f.geometry.coordinates[0];
+                        f.properties._anelRealOrig = JSON.parse(JSON.stringify(anelIBGE));
+                        f.properties._anelReal = JSON.parse(JSON.stringify(anelIBGE));
+                        const anelBase = f.properties.anel_uniforme || anelIBGE;
+                        const anelStd = gerarLotePadronizado(anelBase, PADRAO_LARGURA_M, PADRAO_PROFUNDIDADE_M);
+                        f.properties._anelUni = anelStd;
+                        f.properties._anelUniBase = JSON.parse(JSON.stringify(anelStd));
+                        // Inicializa na visualização padrão ("Lotes iguais")
+                        f.geometry.coordinates = [anelStd];
                         mapaCasasPorId.set(f.properties.id, f);
                     }
                     E.outros = gj.features.filter(
@@ -2763,9 +2798,11 @@
                         cRealce,
                     ].forEach((c) => c && map.removeLayer(c));
 
+                    const canvasCasas = L.canvas({ padding: 0.5 });
                     cCasas = L.geoJSON(
                         { type: "FeatureCollection", features: E.casas },
                         {
+                            renderer: canvasCasas,
                             style: estilo,
                             onEachFeature: (f, l) => {
                                 mapaCamadasCasas.set(f.properties.id, l);
@@ -2967,13 +3004,13 @@
                     for (const f of E.casas) {
                         const anel = uni
                             ? f.properties._anelUni
-                            : f.properties._anelReal;
+                            : f.properties._anelRealOrig;
                         f.geometry.coordinates = [anel];
                         f.properties._c = centroide(anel);
                     }
                     $("notaPos").innerHTML = uni
-                        ? "Cada face dividida em lotes de largura igual, do primeiro ao último endereço. Útil para conferir a contagem: a fileira fica cheia, sem vãos."
-                        : "Cada casa no ponto exato levantado pelo IBGE. Vãos na fileira são lotes sem domicílio cadastrado — não são casas faltando.";
+                        ? "Cada face dividida em lotes de largura igual, no tamanho e alinhamento padronizados."
+                        : "Cada casa no ponto exato levantado pelo IBGE (apenas para leitura e referência).";
                     const selec = E.selec;
                     E.quadras.forEach((q) => {
                         q.contorno = casco(
@@ -2989,8 +3026,8 @@
                     }
                     st(
                         uni
-                            ? `Visão <b>lotes iguais</b> — as ${E.casas.length.toLocaleString("pt-BR")} casas distribuídas igualmente ao longo de cada face.`
-                            : `Visão <b>coordenada real</b> — ${E.casas.length.toLocaleString("pt-BR")} casas no ponto cadastrado pelo IBGE.`,
+                            ? `Visão <b>lotes iguais</b> — as ${E.casas.length.toLocaleString("pt-BR")} casas exibidas com tamanho e espaçamento padronizados.`
+                            : `Visão <b>coordenada real</b> — ${E.casas.length.toLocaleString("pt-BR")} casas no ponto original do CNEFE/IBGE (apenas leitura).`,
                     );
                 }
 
@@ -3214,6 +3251,9 @@
                 const mapaCasasPorId = new Map();
                 const mapaCamadasCasas = new Map();
                 const cSelecaoOverlay = L.layerGroup().addTo(map);
+                const cPreviewOverlay = L.layerGroup().addTo(map);
+
+                let previewQuarteiraoAtivo = null;
 
                 const undoStack = [];
                 const redoStack = [];
@@ -3265,22 +3305,24 @@
                 }
 
                 function aplicarSnapshot(snapshot) {
+                    cancelarPreviewQuarteirao();
                     E.ajustes = JSON.parse(JSON.stringify(snapshot.ajustes || {}));
                     E.grupos = JSON.parse(JSON.stringify(snapshot.grupos || []));
                     E.selecionadas = new Set(snapshot.selecionadas || []);
+
                     for (const f of E.casas) {
                         const id = f.properties.id;
                         if (E.ajustes[id] && E.ajustes[id].coords) {
-                            f.properties._anelReal = JSON.parse(JSON.stringify(E.ajustes[id].coords));
+                            f.properties._anelUni = JSON.parse(JSON.stringify(E.ajustes[id].coords));
                         } else {
-                            f.properties._anelReal = JSON.parse(JSON.stringify(f.properties._anelRealOrig));
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
                         }
-                        if (E.posicao === "real") {
-                            f.geometry.coordinates = [f.properties._anelReal];
-                            f.properties._c = centroide(f.properties._anelReal);
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [f.properties._anelUni];
+                            f.properties._c = centroide(f.properties._anelUni);
                             const layer = mapaCamadasCasas.get(id);
                             if (layer) {
-                                layer.setLatLngs(f.properties._anelReal.map((c) => [c[1], c[0]]));
+                                layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
                                 layer.redraw();
                             }
                         }
@@ -3288,9 +3330,56 @@
                     atualizarOverlayEdicao();
                     atualizarUIEdicao();
                     atualizarBotoesHistorico();
+                    pintar();
                 }
 
-                // Transformações em metros projetados (EPSG:3857)
+                // ============ Padronização dos Lotes (Metros / EPSG:3857) ============
+                function gerarLotePadronizado(anelCoords, larguraM, profundidadeM) {
+                    if (!anelCoords || anelCoords.length < 4) return anelCoords;
+                    const ptsM = [];
+                    for (let i = 0; i < Math.min(4, anelCoords.length); i++) {
+                        const p = L.CRS.EPSG3857.project(L.latLng(anelCoords[i][1], anelCoords[i][0]));
+                        ptsM.push(p);
+                    }
+                    const cx = (ptsM[0].x + ptsM[1].x + ptsM[2].x + ptsM[3].x) / 4;
+                    const cy = (ptsM[0].y + ptsM[1].y + ptsM[2].y + ptsM[3].y) / 4;
+
+                    // Vetor do bordo frontal (largura)
+                    let vx = ptsM[1].x - ptsM[0].x;
+                    let vy = ptsM[1].y - ptsM[0].y;
+                    let lenV = Math.hypot(vx, vy);
+                    let ux = 1, uy = 0;
+                    if (lenV > 0.001) {
+                        ux = vx / lenV;
+                        uy = vy / lenV;
+                    }
+
+                    // Vetor do bordo lateral (profundidade)
+                    let sx = ptsM[2].x - ptsM[1].x;
+                    let sy = ptsM[2].y - ptsM[1].y;
+                    let lenS = Math.hypot(sx, sy);
+                    let nx = -uy, ny = ux;
+                    if (lenS > 0.001) {
+                        nx = sx / lenS;
+                        ny = sy / lenS;
+                    }
+
+                    const hw = larguraM / 2;
+                    const hd = profundidadeM / 2;
+                    const cantos = [
+                        { x: cx - hw * ux - hd * nx, y: cy - hw * uy - hd * ny },
+                        { x: cx + hw * ux - hd * nx, y: cy + hw * uy - hd * ny },
+                        { x: cx + hw * ux + hd * nx, y: cy + hw * uy + hd * ny },
+                        { x: cx - hw * ux + hd * nx, y: cy - hw * uy + hd * ny },
+                    ];
+                    cantos.push(cantos[0]);
+                    return cantos.map((pt) => {
+                        const ll = L.CRS.EPSG3857.unproject(L.point(pt.x, pt.y));
+                        return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                    });
+                }
+
+                // Transformações em metros projetados (EPSG:3857) - sem deformações
                 function aplicarTranslacaoMetros(anel, dx, dy) {
                     return anel.map((pt) => {
                         const p = L.CRS.EPSG3857.project(L.latLng(pt[1], pt[0]));
@@ -3318,7 +3407,7 @@
                 function calcularCentroideMetros(features) {
                     let totalX = 0, totalY = 0, totalPts = 0;
                     for (const f of features) {
-                        const anel = f.properties._anelReal;
+                        const anel = f.properties._anelUni;
                         for (let i = 0; i < anel.length - 1; i++) {
                             const p = L.CRS.EPSG3857.project(L.latLng(anel[i][1], anel[i][0]));
                             totalX += p.x;
@@ -3330,17 +3419,31 @@
                     return { x: totalX / totalPts, y: totalY / totalPts };
                 }
 
-                // Grupos
+                // ============ Grupos e Quarteirões ============
                 function obterGrupo(id) {
-                    return E.grupos.find((g) => g.includes(id)) || null;
+                    if (!E.grupos) return null;
+                    for (const g of E.grupos) {
+                        const casas = Array.isArray(g) ? g : g.casas;
+                        if (casas && casas.includes(id)) {
+                            return Array.isArray(g)
+                                ? { id: "grp-" + casas[0], tipo: "grupo", casas }
+                                : g;
+                        }
+                    }
+                    return null;
+                }
+
+                function obterIdGrupo(id) {
+                    const g = obterGrupo(id);
+                    return g ? g.id : null;
                 }
 
                 function expandirGrupos(conjuntoIds) {
                     const expandido = new Set(conjuntoIds);
                     for (const id of conjuntoIds) {
                         const g = obterGrupo(id);
-                        if (g) {
-                            for (const membro of g) expandido.add(membro);
+                        if (g && g.casas) {
+                            for (const membro of g.casas) expandido.add(membro);
                         }
                     }
                     return expandido;
@@ -3350,10 +3453,40 @@
                     if (E.selecionadas.size < 2) return;
                     salvarSnapshotHistorico();
                     const ids = Array.from(E.selecionadas);
+                    const novoGrpId = "grp-" + Date.now();
+
+                    // Remove de grupos anteriores
                     E.grupos = E.grupos
-                        .map((g) => g.filter((id) => !E.selecionadas.has(id)))
-                        .filter((g) => g.length >= 2);
-                    E.grupos.push(ids);
+                        .map((g) => ({
+                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                            tipo: g.tipo || "grupo",
+                            casas: (g.casas || g).filter((id) => !E.selecionadas.has(id))
+                        }))
+                        .filter((g) => g.casas.length >= 2);
+
+                    E.grupos.push({
+                        id: novoGrpId,
+                        tipo: "grupo",
+                        casas: ids
+                    });
+
+                    for (const id of ids) {
+                        if (!E.ajustes[id]) {
+                            const item = mapaCasasPorId.get(id);
+                            const anel = item.properties._anelUni;
+                            const c = centroide(anel);
+                            E.ajustes[id] = {
+                                lng: Number(c[0].toFixed(7)),
+                                lat: Number(c[1].toFixed(7)),
+                                rot_deg: 0,
+                                grupo_id: novoGrpId,
+                                coords: anel
+                            };
+                        } else {
+                            E.ajustes[id].grupo_id = novoGrpId;
+                        }
+                    }
+
                     marcarSalvo(false);
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
@@ -3364,9 +3497,21 @@
                 function desagrupar() {
                     if (E.selecionadas.size === 0) return;
                     salvarSnapshotHistorico();
+
                     E.grupos = E.grupos
-                        .map((g) => g.filter((id) => !E.selecionadas.has(id)))
-                        .filter((g) => g.length >= 2);
+                        .map((g) => ({
+                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                            tipo: g.tipo || "grupo",
+                            casas: (g.casas || g).filter((id) => !E.selecionadas.has(id))
+                        }))
+                        .filter((g) => g.casas.length >= 2);
+
+                    for (const id of E.selecionadas) {
+                        if (E.ajustes[id]) {
+                            E.ajustes[id].grupo_id = null;
+                        }
+                    }
+
                     marcarSalvo(false);
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
@@ -3374,16 +3519,273 @@
                     st("Casas selecionadas desagrupadas.");
                 }
 
-                // Movimentação
+                // ============ Agrupar em Quarteirão (Formato de Referência) ============
+                function calcularQuarteiraoPadronizado(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    // 1. Centróides em EPSG:3857
+                    const ptsM = feats.map((f) => {
+                        const cLL = centroide(f.properties._anelUni);
+                        const pM = L.CRS.EPSG3857.project(L.latLng(cLL[1], cLL[0]));
+                        return { f, x: pM.x, y: pM.y };
+                    });
+
+                    const cxTotal = ptsM.reduce((s, p) => s + p.x, 0) / ptsM.length;
+                    const cyTotal = ptsM.reduce((s, p) => s + p.y, 0) / ptsM.length;
+
+                    // 2. Direção dominante (PCA) do quarteirão
+                    let sxx = 0, syy = 0, sxy = 0;
+                    for (const p of ptsM) {
+                        const dx = p.x - cxTotal;
+                        const dy = p.y - cyTotal;
+                        sxx += dx * dx;
+                        syy += dy * dy;
+                        sxy += dx * dy;
+                    }
+                    const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    let nx = -uy;
+                    let ny = ux;
+
+                    // 3. Divisão em duas fileiras
+                    const facesMap = new Map();
+                    for (const item of ptsM) {
+                        const faceVal = item.f.properties.face;
+                        if (!facesMap.has(faceVal)) facesMap.set(faceVal, []);
+                        facesMap.get(faceVal).push(item);
+                    }
+
+                    let fileira1 = [];
+                    let fileira2 = [];
+
+                    if (facesMap.size === 2) {
+                        const chaves = Array.from(facesMap.keys()).sort((a, b) => a - b);
+                        fileira1 = facesMap.get(chaves[0]);
+                        fileira2 = facesMap.get(chaves[1]);
+                    } else {
+                        // Divide pela posição em relação ao eixo principal
+                        const enriquecidos = ptsM.map((item) => {
+                            const distN = (item.x - cxTotal) * nx + (item.y - cyTotal) * ny;
+                            return { ...item, distN };
+                        }).sort((a, b) => a.distN - b.distN);
+
+                        const meio = Math.floor(enriquecidos.length / 2);
+                        fileira1 = enriquecidos.slice(0, meio);
+                        fileira2 = enriquecidos.slice(meio);
+                    }
+
+                    // Determina qual fileira fica em +n e qual em -n
+                    const avgN1 = fileira1.reduce((s, p) => s + ((p.x - cxTotal) * nx + (p.y - cyTotal) * ny), 0) / (fileira1.length || 1);
+                    const avgN2 = fileira2.reduce((s, p) => s + ((p.x - cxTotal) * nx + (p.y - cyTotal) * ny), 0) / (fileira2.length || 1);
+
+                    if (avgN1 > avgN2) {
+                        const tmp = fileira1;
+                        fileira1 = fileira2;
+                        fileira2 = tmp;
+                    }
+
+                    // 4. Ordenação dos lotes por número da casa
+                    const ordenarFileira = (fil) => {
+                        return fil.slice().sort((a, b) => {
+                            const numA = Number(a.f.properties.numero);
+                            const numB = Number(b.f.properties.numero);
+                            if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+                            const tA = (a.x - cxTotal) * ux + (a.y - cyTotal) * uy;
+                            const tB = (b.x - cxTotal) * ux + (b.y - cyTotal) * uy;
+                            return tA - tB;
+                        });
+                    };
+
+                    const fil1Ord = ordenarFileira(fileira1);
+                    const fil2Ord = ordenarFileira(fileira2);
+
+                    // Ajusta o sentido do eixo u para coincidir com a progressão da numeração
+                    const checkSentido = (fil) => {
+                        if (fil.length < 2) return 0;
+                        const pPrimeiro = (fil[0].x - cxTotal) * ux + (fil[0].y - cyTotal) * uy;
+                        const pUltimo = (fil[fil.length - 1].x - cxTotal) * ux + (fil[fil.length - 1].y - cyTotal) * uy;
+                        return pUltimo - pPrimeiro;
+                    };
+                    const s1 = checkSentido(fil1Ord);
+                    const s2 = checkSentido(fil2Ord);
+                    if (s1 + s2 < 0) {
+                        ux = -ux; uy = -uy;
+                        nx = -nx; ny = -ny;
+                    }
+
+                    // 5. Posicionamento padronizado em 2 fileiras paralelas e alinhadas
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+                    const S = PADRAO_ESPACAMENTO_M;
+                    const G = PADRAO_INTERVALO_FILEIRAS_M;
+
+                    const nMax = Math.max(fil1Ord.length, fil2Ord.length);
+                    const passoLote = W + S;
+                    const distCentroFileiras = D + G;
+
+                    const resultadoAjustes = new Map();
+
+                    const gerarPoligonoMetros = (cxLote, cyLote) => {
+                        const hw = W / 2;
+                        const hd = D / 2;
+                        const cantos = [
+                            { x: cxLote - hw * ux - hd * nx, y: cyLote - hw * uy - hd * ny },
+                            { x: cxLote + hw * ux - hd * nx, y: cyLote + hw * uy - hd * ny },
+                            { x: cxLote + hw * ux + hd * nx, y: cyLote + hw * uy + hd * ny },
+                            { x: cxLote - hw * ux + hd * nx, y: cyLote - hw * uy + hd * ny },
+                        ];
+                        cantos.push(cantos[0]);
+                        return cantos.map((pt) => {
+                            const ll = L.CRS.EPSG3857.unproject(L.point(pt.x, pt.y));
+                            return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                        });
+                    };
+
+                    // Fileira 1 (lado -n)
+                    const offsetN1 = -distCentroFileiras / 2;
+                    for (let k = 0; k < fil1Ord.length; k++) {
+                        const tk = (k - (nMax - 1) / 2) * passoLote;
+                        const cxLote = cxTotal + tk * ux + offsetN1 * nx;
+                        const cyLote = cyTotal + tk * uy + offsetN1 * ny;
+                        const anel = gerarPoligonoMetros(cxLote, cyLote);
+                        const cLL = centroide(anel);
+                        resultadoAjustes.set(fil1Ord[k].f.properties.id, {
+                            coords: anel,
+                            lng: cLL[0],
+                            lat: cLL[1],
+                            rot_deg: Number(((theta * 180) / Math.PI).toFixed(2))
+                        });
+                    }
+
+                    // Fileira 2 (lado +n)
+                    const offsetN2 = distCentroFileiras / 2;
+                    for (let k = 0; k < fil2Ord.length; k++) {
+                        const tk = (k - (nMax - 1) / 2) * passoLote;
+                        const cxLote = cxTotal + tk * ux + offsetN2 * nx;
+                        const cyLote = cyTotal + tk * uy + offsetN2 * ny;
+                        const anel = gerarPoligonoMetros(cxLote, cyLote);
+                        const cLL = centroide(anel);
+                        resultadoAjustes.set(fil2Ord[k].f.properties.id, {
+                            coords: anel,
+                            lng: cLL[0],
+                            lat: cLL[1],
+                            rot_deg: Number(((theta * 180) / Math.PI).toFixed(2))
+                        });
+                    }
+
+                    return {
+                        resultadoAjustes,
+                        totalCasas: feats.length,
+                        n1: fil1Ord.length,
+                        n2: fil2Ord.length
+                    };
+                }
+
+                function iniciarAgrupamentoQuarteirao() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularQuarteiraoPadronizado(E.selecionadas);
+                    if (!calc) return;
+
+                    previewQuarteiraoAtivo = calc;
+                    cPreviewOverlay.clearLayers();
+
+                    for (const [id, ajust] of calc.resultadoAjustes) {
+                        const pts = ajust.coords.map((c) => [c[1], c[0]]);
+                        const poly = L.polygon(pts, {
+                            color: "#ff7700",
+                            weight: 2.2,
+                            dashArray: "5 4",
+                            fillColor: "#ff9900",
+                            fillOpacity: 0.55,
+                            interactive: false
+                        });
+                        cPreviewOverlay.addLayer(poly);
+                    }
+
+                    const banner = $("bannerPreviewQuarteirao");
+                    if (banner) {
+                        banner.style.display = "flex";
+                        const txt = $("previewQuarteiraoTexto");
+                        if (txt) {
+                            txt.innerHTML = `<b>Pré-visualização Quarteirão:</b> ${calc.totalCasas} casas (${calc.n1} na Face A, ${calc.n2} na Face B)`;
+                        }
+                    }
+                    st("<b>Pré-visualização gerada.</b> Verifique o alinhamento das duas fileiras e confirme ou cancele.");
+                }
+
+                function confirmarAgrupamentoQuarteirao() {
+                    if (!previewQuarteiraoAtivo) return;
+                    salvarSnapshotHistorico();
+
+                    const calc = previewQuarteiraoAtivo;
+                    const novoGrpId = "quarteirao-" + Date.now();
+                    const ids = Array.from(calc.resultadoAjustes.keys());
+
+                    // Remove de grupos anteriores
+                    E.grupos = E.grupos
+                        .map((g) => ({
+                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                            tipo: g.tipo || "grupo",
+                            casas: (g.casas || g).filter((id) => !calc.resultadoAjustes.has(id))
+                        }))
+                        .filter((g) => g.casas.length >= 2);
+
+                    E.grupos.push({
+                        id: novoGrpId,
+                        tipo: "quarteirao",
+                        casas: ids
+                    });
+
+                    for (const [id, ajust] of calc.resultadoAjustes) {
+                        const item = mapaCasasPorId.get(id);
+                        if (item) {
+                            item.properties._anelUni = ajust.coords;
+                            if (E.posicao === "uniforme") {
+                                item.geometry.coordinates = [ajust.coords];
+                                item.properties._c = [ajust.lng, ajust.lat];
+                                const layer = mapaCamadasCasas.get(id);
+                                if (layer) {
+                                    layer.setLatLngs(ajust.coords.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                        E.ajustes[id] = {
+                            lng: ajust.lng,
+                            lat: ajust.lat,
+                            rot_deg: ajust.rot_deg,
+                            grupo_id: novoGrpId,
+                            coords: ajust.coords
+                        };
+                    }
+
+                    cancelarPreviewQuarteirao();
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st(`<b>Quarteirão padronizado aplicado:</b> ${ids.length} casas agrupadas em 2 fileiras paralelas.`);
+                }
+
+                function cancelarPreviewQuarteirao() {
+                    previewQuarteiraoAtivo = null;
+                    cPreviewOverlay.clearLayers();
+                    const banner = $("bannerPreviewQuarteirao");
+                    if (banner) banner.style.display = "none";
+                }
+
+                // ============ Movimentação e Rotação ============
                 function moverCasasSelecionadas(dx, dy) {
                     if (E.selecionadas.size === 0) return;
                     for (const id of E.selecionadas) {
                         const f = mapaCasasPorId.get(id);
                         if (!f) continue;
-                        const anelAtual = f.properties._anelReal;
+                        const anelAtual = f.properties._anelUni;
                         const novoAnel = aplicarTranslacaoMetros(anelAtual, dx, dy);
-                        f.properties._anelReal = novoAnel;
-                        if (E.posicao === "real") {
+                        f.properties._anelUni = novoAnel;
+                        if (E.posicao === "uniforme") {
                             f.geometry.coordinates = [novoAnel];
                             f.properties._c = centroide(novoAnel);
                             const layer = mapaCamadasCasas.get(id);
@@ -3392,11 +3794,12 @@
                                 layer.redraw();
                             }
                         }
+                        const cLL = centroide(novoAnel);
                         if (!E.ajustes[id]) {
-                            E.ajustes[id] = { dx_m: 0, dy_m: 0, rot_deg: 0, coords: novoAnel };
+                            E.ajustes[id] = { lng: cLL[0], lat: cLL[1], rot_deg: 0, grupo_id: obterIdGrupo(id), coords: novoAnel };
                         }
-                        E.ajustes[id].dx_m = Number(((E.ajustes[id].dx_m || 0) + dx).toFixed(3));
-                        E.ajustes[id].dy_m = Number(((E.ajustes[id].dy_m || 0) + dy).toFixed(3));
+                        E.ajustes[id].lng = Number(cLL[0].toFixed(7));
+                        E.ajustes[id].lat = Number(cLL[1].toFixed(7));
                         E.ajustes[id].coords = novoAnel;
                     }
                     marcarSalvo(false);
@@ -3405,7 +3808,6 @@
                     atualizarUIEdicao();
                 }
 
-                // Rotação
                 function rotacionarCasasSelecionadas(graus) {
                     if (E.selecionadas.size === 0 || !graus) return;
                     salvarSnapshotHistorico();
@@ -3415,10 +3817,10 @@
                     const rad = (graus * Math.PI) / 180;
                     for (const f of feats) {
                         const id = f.properties.id;
-                        const anelAtual = f.properties._anelReal;
+                        const anelAtual = f.properties._anelUni;
                         const novoAnel = aplicarRotacaoMetros(anelAtual, centroM, rad);
-                        f.properties._anelReal = novoAnel;
-                        if (E.posicao === "real") {
+                        f.properties._anelUni = novoAnel;
+                        if (E.posicao === "uniforme") {
                             f.geometry.coordinates = [novoAnel];
                             f.properties._c = centroide(novoAnel);
                             const layer = mapaCamadasCasas.get(id);
@@ -3427,10 +3829,14 @@
                                 layer.redraw();
                             }
                         }
+                        const cLL = centroide(novoAnel);
+                        const prevRot = (E.ajustes[id] && E.ajustes[id].rot_deg) || 0;
                         if (!E.ajustes[id]) {
-                            E.ajustes[id] = { dx_m: 0, dy_m: 0, rot_deg: 0, coords: novoAnel };
+                            E.ajustes[id] = { lng: cLL[0], lat: cLL[1], rot_deg: 0, grupo_id: obterIdGrupo(id), coords: novoAnel };
                         }
-                        E.ajustes[id].rot_deg = Number(((E.ajustes[id].rot_deg || 0) + graus).toFixed(2));
+                        E.ajustes[id].rot_deg = Number((prevRot + graus).toFixed(2));
+                        E.ajustes[id].lng = Number(cLL[0].toFixed(7));
+                        E.ajustes[id].lat = Number(cLL[1].toFixed(7));
                         E.ajustes[id].coords = novoAnel;
                     }
                     marcarSalvo(false);
@@ -3440,7 +3846,7 @@
                     st(`Seleção rotacionada em <b>${graus > 0 ? "+" : ""}${graus}°</b>.`);
                 }
 
-                // Restaurar
+                // ============ Restauração ============
                 function restaurarSelecionadas() {
                     if (E.selecionadas.size === 0) return;
                     salvarSnapshotHistorico();
@@ -3448,13 +3854,13 @@
                         delete E.ajustes[id];
                         const f = mapaCasasPorId.get(id);
                         if (f) {
-                            f.properties._anelReal = JSON.parse(JSON.stringify(f.properties._anelRealOrig));
-                            if (E.posicao === "real") {
-                                f.geometry.coordinates = [f.properties._anelReal];
-                                f.properties._c = centroide(f.properties._anelReal);
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [f.properties._anelUni];
+                                f.properties._c = centroide(f.properties._anelUni);
                                 const layer = mapaCamadasCasas.get(id);
                                 if (layer) {
-                                    layer.setLatLngs(f.properties._anelReal.map((c) => [c[1], c[0]]));
+                                    layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
                                     layer.redraw();
                                 }
                             }
@@ -3465,22 +3871,64 @@
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
                     atualizarUIEdicao();
-                    st("Casas selecionadas restauradas para a geometria original do IBGE.");
+                    st("Casas selecionadas restauradas para o padrão geométrico original.");
+                }
+
+                function restaurarQuarteiraoSelecionado() {
+                    if (E.selecionadas.size === 0) return;
+                    salvarSnapshotHistorico();
+
+                    const grpsParaRemover = new Set();
+                    const casasParaRestaurar = new Set();
+
+                    for (const id of E.selecionadas) {
+                        const g = obterGrupo(id);
+                        if (g) {
+                            grpsParaRemover.add(g.id);
+                            for (const cid of (g.casas || g)) casasParaRestaurar.add(cid);
+                        } else {
+                            casasParaRestaurar.add(id);
+                        }
+                    }
+
+                    for (const id of casasParaRestaurar) {
+                        delete E.ajustes[id];
+                        const f = mapaCasasPorId.get(id);
+                        if (f) {
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [f.properties._anelUni];
+                                f.properties._c = centroide(f.properties._anelUni);
+                                const layer = mapaCamadasCasas.get(id);
+                                if (layer) {
+                                    layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                    }
+
+                    E.grupos = E.grupos.filter((g) => !grpsParaRemover.has(g.id));
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st(`<b>${casasParaRestaurar.size}</b> casas do quarteirão restauradas ao padrão original.`);
                 }
 
                 function restaurarTodas() {
-                    if (!confirm("Restaurar todas as casas para a geometria original do IBGE? Esta ação remove todas as edições atuais.")) return;
+                    if (!confirm("Restaurar todas as casas para o padrão original? Esta ação remove todas as edições manuais.")) return;
                     salvarSnapshotHistorico();
                     E.ajustes = {};
                     E.grupos = [];
                     for (const f of E.casas) {
-                        f.properties._anelReal = JSON.parse(JSON.stringify(f.properties._anelRealOrig));
-                        if (E.posicao === "real") {
-                            f.geometry.coordinates = [f.properties._anelReal];
-                            f.properties._c = centroide(f.properties._anelReal);
+                        f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [f.properties._anelUni];
+                            f.properties._c = centroide(f.properties._anelUni);
                             const layer = mapaCamadasCasas.get(f.properties.id);
                             if (layer) {
-                                layer.setLatLngs(f.properties._anelReal.map((c) => [c[1], c[0]]));
+                                layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
                                 layer.redraw();
                             }
                         }
@@ -3490,10 +3938,10 @@
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
                     atualizarUIEdicao();
-                    st("Todas as casas foram restauradas à geometria original do IBGE.");
+                    st("Todas as casas foram restauradas ao padrão original.");
                 }
 
-                // Persistência
+                // ============ Persistência ============
                 const LOCAL_STORAGE_KEY = "sig_salvacao_casas_ajustadas_v1";
 
                 function salvarLocalStorage() {
@@ -3501,6 +3949,14 @@
                         const payload = {
                             versao: 1,
                             data_modificacao: new Date().toISOString(),
+                            descricao: "Ajustes manuais de posição e rotação das casas (Residencial Salvação, Santarém/PA)",
+                            parametros_padronizacao: {
+                                largura_m: PADRAO_LARGURA_M,
+                                profundidade_m: PADRAO_PROFUNDIDADE_M,
+                                espacamento_lotes_m: PADRAO_ESPACAMENTO_M,
+                                intervalo_fileiras_m: PADRAO_INTERVALO_FILEIRAS_M,
+                            },
+                            total_ajustadas: Object.keys(E.ajustes).length,
                             grupos: E.grupos,
                             ajustes: E.ajustes,
                         };
@@ -3541,6 +3997,12 @@
                         versao: 1,
                         data_modificacao: new Date().toISOString(),
                         descricao: "Ajustes manuais de posição e rotação das casas (Residencial Salvação, Santarém/PA)",
+                        parametros_padronizacao: {
+                            largura_m: PADRAO_LARGURA_M,
+                            profundidade_m: PADRAO_PROFUNDIDADE_M,
+                            espacamento_lotes_m: PADRAO_ESPACAMENTO_M,
+                            intervalo_fileiras_m: PADRAO_INTERVALO_FILEIRAS_M,
+                        },
                         total_ajustadas: Object.keys(E.ajustes).length,
                         grupos: E.grupos,
                         ajustes: E.ajustes,
@@ -3585,15 +4047,12 @@
                                 props[k] = v;
                             }
                         }
-                        if (f.properties._anelUni) {
-                            props.anel_uniforme = f.properties._anelUni;
-                        }
                         return {
                             type: "Feature",
                             properties: props,
                             geometry: {
                                 type: "Polygon",
-                                coordinates: [f.properties._anelReal],
+                                coordinates: [f.properties._anelUni],
                             },
                         };
                     });
@@ -3615,7 +4074,7 @@
                         features: [...featuresCasas, ...featuresOutros],
                     };
 
-                    baixarArquivo(JSON.stringify(geojson), "casas_salvacao_ajustado.geojson", "application/geo+json");
+                    baixarArquivo(JSON.stringify(geojson, null, 2), "casas_salvacao_ajustado.geojson", "application/geo+json");
                     st("GeoJSON exportado como <b>casas_salvacao_ajustado.geojson</b> com atributos do IBGE preservados.");
                 }
 
@@ -3637,7 +4096,7 @@
                                 const tServ = new Date(servidorData.data_modificacao || 0).getTime();
                                 escolhido = tLocal >= tServ ? localData : servidorData;
                             } else if (localData) {
-                                escolhido = localData;
+                                chosen: escolhido = localData;
                             }
 
                             if (escolhido && (Object.keys(escolhido.ajustes || {}).length > 0 || (escolhido.grupos || []).length > 0)) {
@@ -3650,13 +4109,13 @@
                         });
                 }
 
-                // Interações e Seleção
+                // ============ Interações e Seleção ============
                 function aoClicarCasaModoEdicao(f, e) {
                     const id = f.properties.id;
                     const shift = e.originalEvent && (e.originalEvent.shiftKey || e.originalEvent.ctrlKey);
                     if (shift) {
                         const grupo = obterGrupo(id);
-                        const membros = grupo || [id];
+                        const membros = (grupo && grupo.casas) ? grupo.casas : [id];
                         const todosMarcados = membros.every((m) => E.selecionadas.has(m));
                         if (todosMarcados) {
                             membros.forEach((m) => E.selecionadas.delete(m));
@@ -3665,8 +4124,8 @@
                         }
                     } else {
                         const grupo = obterGrupo(id);
-                        if (grupo) {
-                            E.selecionadas = new Set(grupo);
+                        if (grupo && grupo.casas) {
+                            E.selecionadas = new Set(grupo.casas);
                         } else {
                             E.selecionadas = new Set([id]);
                         }
@@ -3685,11 +4144,11 @@
                     if (!E.selecionadas.has(id)) {
                         if (shift) {
                             const grupo = obterGrupo(id);
-                            const membros = grupo || [id];
+                            const membros = (grupo && grupo.casas) ? grupo.casas : [id];
                             membros.forEach((m) => E.selecionadas.add(m));
                         } else {
                             const grupo = obterGrupo(id);
-                            E.selecionadas = new Set(grupo || [id]);
+                            E.selecionadas = new Set((grupo && grupo.casas) ? grupo.casas : [id]);
                         }
                         atualizarSelecao();
                     }
@@ -3700,7 +4159,7 @@
                     for (const selId of E.selecionadas) {
                         const item = mapaCasasPorId.get(selId);
                         if (item) {
-                            arrastoStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelReal)));
+                            arrastoStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelUni)));
                         }
                     }
                 }
@@ -3727,7 +4186,7 @@
 
                     const latlngsTotais = [];
                     for (const f of feats) {
-                        const pts = f.properties._anelReal.map((c) => [c[1], c[0]]);
+                        const pts = f.properties._anelUni.map((c) => [c[1], c[0]]);
                         latlngsTotais.push(...pts);
                         const selPoly = L.polygon(pts, {
                             color: "#00d2ff",
@@ -3785,13 +4244,13 @@
                         for (const selId of E.selecionadas) {
                             const item = mapaCasasPorId.get(selId);
                             if (item) {
-                                rotStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelReal)));
+                                rotStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelUni)));
                             }
                         }
                     });
                     cSelecaoOverlay.addLayer(alcaMarker);
 
-                    // Atualiza a barra flutuante de ações rápidas
+                    // Atualiza a barra flutuante de ações rápidas sobre a seleção
                     if (barra) {
                         barra.style.display = "flex";
                         const barraScreen = L.point(handleScreen.x, handleScreen.y - 18);
@@ -3803,15 +4262,18 @@
 
                         barra.innerHTML = `
                             <b>${E.selecionadas.size} casa(s)</b>
-                            ${podeAgrupar ? '<button class="btn" id="btnFlutuanteAgrupar" title="Agrupar">🔗 Agrupar</button>' : ""}
-                            ${algumEmGrupo ? '<button class="btn" id="btnFlutuanteDesagrupar" title="Desagrupar">⛓️‍💥 Desagrupar</button>' : ""}
+                            ${podeAgrupar ? '<button class="btn" id="btnFlutuanteAgrupar" title="Agrupar casas selecionadas">🔗 Agrupar</button>' : ""}
+                            ${podeAgrupar ? '<button class="btn" id="btnFlutuanteQuarteirao" title="Organizar seleção em quarteirão padronizado">🏘️ Agrupar em quarteirão</button>' : ""}
+                            ${algumEmGrupo ? '<button class="btn" id="btnFlutuanteDesagrupar" title="Desagrupar casas selecionadas">⛓️‍💥 Desagrupar</button>' : ""}
                             <button class="btn" id="btnFlutuanteRotM15" title="Girar -15°">-15°</button>
                             <button class="btn" id="btnFlutuanteRotP15" title="Girar +15°">+15°</button>
-                            <button class="btn" id="btnFlutuanteRestaurar" title="Restaurar ao original do IBGE">↺</button>
+                            <button class="btn" id="btnFlutuanteRestaurar" title="Restaurar ao padrão original">↺</button>
                         `;
 
                         const bAg = $("btnFlutuanteAgrupar");
                         if (bAg) bAg.onclick = (e) => { e.stopPropagation(); agrupar(); };
+                        const bQuart = $("btnFlutuanteQuarteirao");
+                        if (bQuart) bQuart.onclick = (e) => { e.stopPropagation(); iniciarAgrupamentoQuarteirao(); };
                         const bDes = $("btnFlutuanteDesagrupar");
                         if (bDes) bDes.onclick = (e) => { e.stopPropagation(); desagrupar(); };
                         const bM15 = $("btnFlutuanteRotM15");
@@ -3844,6 +4306,9 @@
                     const bAg = $("btnAgrupar");
                     if (bAg) bAg.disabled = selCount < 2;
 
+                    const bQuart = $("btnQuarteirao");
+                    if (bQuart) bQuart.disabled = selCount < 2;
+
                     const bDes = $("btnDesagrupar");
                     if (bDes) {
                         const temGrupoNaSel = Array.from(E.selecionadas).some((id) => obterGrupo(id));
@@ -3852,6 +4317,9 @@
 
                     const bRestSel = $("btnRestaurarSel");
                     if (bRestSel) bRestSel.disabled = selCount === 0;
+
+                    const bRestQuart = $("btnRestaurarQuarteirao");
+                    if (bRestQuart) bRestQuart.disabled = selCount === 0;
 
                     atualizarBotoesHistorico();
                 }
@@ -3864,13 +4332,13 @@
                     if (grpEd) grpEd.style.display = isEdit ? "flex" : "none";
 
                     if (isEdit) {
-                        if (E.posicao !== "real") {
-                            E.posicao = "real";
+                        if (E.posicao !== "uniforme") {
+                            E.posicao = "uniforme";
                             [...$("segPos").children].forEach((x) =>
-                                x.setAttribute("aria-pressed", String(x.dataset.v === "real")),
+                                x.setAttribute("aria-pressed", String(x.dataset.v === "uniforme")),
                             );
                             aplicarPosicao();
-                            st("<b>Modo Edição ativado.</b> Ajustes permitidos apenas na geometria 'Coordenada real'.");
+                            st("<b>Modo Edição ativado.</b> Ajustes permitidos apenas na geometria 'Lotes iguais' (tamanho padronizado).");
                         } else {
                             st("<b>Modo Edição ativado.</b> Selecione casas para mover, agrupar ou rotacionar.");
                         }
@@ -3879,6 +4347,7 @@
                         }
                         map.closePopup();
                     } else {
+                        cancelarPreviewQuarteirao();
                         map.dragging.enable();
                         E.selecionadas.clear();
                         atualizarOverlayEdicao();
@@ -3899,7 +4368,7 @@
                     }
                 }
 
-                // Eventos Globais de Movimento e Caixa de Seleção
+                // ============ Eventos de Arrastar, Rotacionar e Selecionar por Área ============
                 let boxAtiva = false;
                 let boxStartPoint = null;
                 let panDireitoAtivo = false;
@@ -3918,9 +4387,9 @@
                         return;
                     }
 
-                    // Seleção por retângulo em área vazia
+                    // Seleção por retângulo em área vazia (botão esquerdo)
                     if (E.modoEdicao && E.ferramentaEdicao === "selecionar" && e.button === 0 && !arrastoEmAndamento && !rotacionandoEmAndamento) {
-                        if (e.target.closest(".leaflet-interactive") || e.target.closest(".barra-flutuante-selecao") || e.target.closest(".leaflet-control")) {
+                        if (e.target.closest(".leaflet-interactive") || e.target.closest(".barra-flutuante-selecao") || e.target.closest(".banner-preview-quarteirao") || e.target.closest(".leaflet-control")) {
                             return;
                         }
                         boxAtiva = true;
@@ -3952,7 +4421,7 @@
                             const novoAnel = aplicarTranslacaoMetros(startRing, dx, dy);
                             const item = mapaCasasPorId.get(selId);
                             if (item) {
-                                item.properties._anelReal = novoAnel;
+                                item.properties._anelUni = novoAnel;
                                 item.geometry.coordinates = [novoAnel];
                                 item.properties._c = centroide(novoAnel);
                                 const layer = mapaCamadasCasas.get(selId);
@@ -3987,7 +4456,7 @@
                             const novoAnel = aplicarRotacaoMetros(startRing, rotCentroMeters, deltaRad);
                             const item = mapaCasasPorId.get(selId);
                             if (item) {
-                                item.properties._anelReal = novoAnel;
+                                item.properties._anelUni = novoAnel;
                                 item.geometry.coordinates = [novoAnel];
                                 item.properties._c = centroide(novoAnel);
                                 const layer = mapaCamadasCasas.get(selId);
@@ -4001,7 +4470,7 @@
                         return;
                     }
 
-                    // Desenho da caixa de seleção
+                    // Desenho da caixa de seleção (marquee)
                     if (boxAtiva && boxStartPoint) {
                         const curPoint = map.mouseEventToContainerPoint(e);
                         const x1 = Math.min(boxStartPoint.x, curPoint.x);
@@ -4043,13 +4512,18 @@
                             if (Math.hypot(dx, dy) > 0.3) {
                                 salvarSnapshotHistorico();
                                 for (const selId of E.selecionadas) {
-                                    if (!E.ajustes[selId]) {
-                                        E.ajustes[selId] = { dx_m: 0, dy_m: 0, rot_deg: 0, coords: null };
-                                    }
-                                    E.ajustes[selId].dx_m = Number(((E.ajustes[selId].dx_m || 0) + dx).toFixed(3));
-                                    E.ajustes[selId].dy_m = Number(((E.ajustes[selId].dy_m || 0) + dy).toFixed(3));
                                     const item = mapaCasasPorId.get(selId);
-                                    if (item) E.ajustes[selId].coords = item.properties._anelReal;
+                                    if (item) {
+                                        const cLL = centroide(item.properties._anelUni);
+                                        const prevRot = (E.ajustes[selId] && E.ajustes[selId].rot_deg) || 0;
+                                        E.ajustes[selId] = {
+                                            lng: Number(cLL[0].toFixed(7)),
+                                            lat: Number(cLL[1].toFixed(7)),
+                                            rot_deg: prevRot,
+                                            grupo_id: obterIdGrupo(selId),
+                                            coords: item.properties._anelUni
+                                        };
+                                    }
                                 }
                                 marcarSalvo(false);
                                 salvarLocalStorage();
@@ -4067,12 +4541,18 @@
                         if (Math.abs(rotDeltaDeg) > 0.1) {
                             salvarSnapshotHistorico();
                             for (const selId of E.selecionadas) {
-                                if (!E.ajustes[selId]) {
-                                    E.ajustes[selId] = { dx_m: 0, dy_m: 0, rot_deg: 0, coords: null };
-                                }
-                                E.ajustes[selId].rot_deg = Number(((E.ajustes[selId].rot_deg || 0) + rotDeltaDeg).toFixed(2));
                                 const item = mapaCasasPorId.get(selId);
-                                if (item) E.ajustes[selId].coords = item.properties._anelReal;
+                                if (item) {
+                                    const cLL = centroide(item.properties._anelUni);
+                                    const prevRot = (E.ajustes[selId] && E.ajustes[selId].rot_deg) || 0;
+                                    E.ajustes[selId] = {
+                                        lng: Number(cLL[0].toFixed(7)),
+                                        lat: Number(cLL[1].toFixed(7)),
+                                        rot_deg: Number((prevRot + rotDeltaDeg).toFixed(2)),
+                                        grupo_id: obterIdGrupo(selId),
+                                        coords: item.properties._anelUni
+                                    };
+                                }
                             }
                             marcarSalvo(false);
                             salvarLocalStorage();
@@ -4084,7 +4564,7 @@
                         atualizarOverlayEdicao();
                     }
 
-                    // Fim da caixa de seleção
+                    // Fim da caixa de seleção (marquee)
                     if (boxAtiva) {
                         boxAtiva = false;
                         const mBox = $("marqueeBox");
@@ -4104,7 +4584,7 @@
                             const novasSel = new Set(shift ? E.selecionadas : []);
 
                             for (const f of E.casas) {
-                                const anel = f.properties._anelReal;
+                                const anel = f.properties._anelUni;
                                 const fBounds = L.latLngBounds(anel.map((p) => [p[1], p[0]]));
                                 if (rectBounds.intersects(fBounds)) {
                                     novasSel.add(f.properties.id);
@@ -4113,8 +4593,8 @@
                             E.selecionadas = expandirGrupos(novasSel);
                             atualizarSelecao();
                         } else if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
-                            // Clique simples em área vazia desmarca seleção
-                            if (!e.target.closest(".leaflet-interactive") && !e.target.closest(".barra-flutuante-selecao") && !e.target.closest(".leaflet-control")) {
+                            // Clique simples em área vazia limpa seleção
+                            if (!e.target.closest(".leaflet-interactive") && !e.target.closest(".barra-flutuante-selecao") && !e.target.closest(".banner-preview-quarteirao") && !e.target.closest(".leaflet-control")) {
                                 if (E.selecionadas.size > 0) {
                                     E.selecionadas.clear();
                                     atualizarSelecao();
@@ -4151,9 +4631,15 @@
                             mapEl.classList.add("cursor-pan");
                         }
                     }
-                    if (e.key === "Escape" && E.modoEdicao) {
-                        E.selecionadas.clear();
-                        atualizarSelecao();
+                    if (e.key === "Escape") {
+                        if (previewQuarteiraoAtivo) {
+                            cancelarPreviewQuarteirao();
+                            return;
+                        }
+                        if (E.modoEdicao) {
+                            E.selecionadas.clear();
+                            atualizarSelecao();
+                        }
                     }
                 });
 
@@ -4181,6 +4667,13 @@
                     if (cContorno) desenhar();
                 });
                 segmento("segPos", (v) => {
+                    if (E.modoEdicao && v === "real") {
+                        alert("A visualização 'Coordenada real' é apenas para leitura e referência do IBGE e não pode ser editada. Desative o Modo Edição para visualizá-la.");
+                        [...$("segPos").children].forEach((x) =>
+                            x.setAttribute("aria-pressed", String(x.dataset.v === "uniforme")),
+                        );
+                        return;
+                    }
                     E.posicao = v;
                     aplicarPosicao();
                 });
@@ -4204,13 +4697,16 @@
                     pintar();
                 });
 
-
                 // Controles de Modo e Edição
                 segmento("segModo", alternarModoApp);
                 segmento("segFerramentaEdicao", alternarFerramentaEdicao);
 
                 $("btnAgrupar").addEventListener("click", agrupar);
                 $("btnDesagrupar").addEventListener("click", desagrupar);
+                $("btnQuarteirao").addEventListener("click", iniciarAgrupamentoQuarteirao);
+                $("btnConfirmarQuarteirao").addEventListener("click", confirmarAgrupamentoQuarteirao);
+                $("btnCancelarQuarteirao").addEventListener("click", cancelarPreviewQuarteirao);
+
                 $("btnDesfazer").addEventListener("click", desfazer);
                 $("btnRefazer").addEventListener("click", refazer);
 
@@ -4261,6 +4757,10 @@
                 $("btnRestaurarSel").addEventListener("click", () => {
                     menuRes.style.display = "none";
                     restaurarSelecionadas();
+                });
+                $("btnRestaurarQuarteirao").addEventListener("click", () => {
+                    menuRes.style.display = "none";
+                    restaurarQuarteiraoSelecionado();
                 });
                 $("btnRestaurarTodas").addEventListener("click", () => {
                     menuRes.style.display = "none";

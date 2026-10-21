@@ -2,8 +2,13 @@
   "versao": 1,
   "data_modificacao": "2026-10-20T12:00:00.000Z",
   "descricao": "Ajustes manuais de posição e rotação das casas (Residencial Salvação, Santarém/PA)",
+  "parametros_padronizacao": {
+    "largura_m": 8.0,
+    "profundidade_m": 16.0,
+    "espacamento_lotes_m": 1.0,
+    "intervalo_fileiras_m": 3.0
+  },
   "total_ajustadas": 0,
   "grupos": [],
   "ajustes": {}
 }
-
