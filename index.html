@@ -125,6 +125,103 @@
             .alca-rotacao-icone:active {
                 cursor: grabbing;
             }
+            .barra-flutuante-selecao .btn-micro {
+                padding: 1px 4px;
+                font-size: 11px;
+                line-height: 1.2;
+                min-width: 17px;
+                cursor: pointer;
+                border: 1px solid var(--border-strong);
+                background: var(--surface-2);
+                border-radius: 4px;
+                color: var(--ink);
+            }
+            .barra-flutuante-selecao .btn-micro:hover {
+                background: var(--surface);
+                border-color: var(--accent);
+            }
+            .divisor-flutuante {
+                width: 1px;
+                height: 18px;
+                background: var(--border);
+                margin: 0 2px;
+            }
+            .grupo-input-flutuante {
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            .grupo-input-flutuante input {
+                border: 1px solid var(--border-strong);
+                background: var(--surface);
+                color: var(--ink);
+                border-radius: 4px;
+                text-align: center;
+            }
+            /* ---------- Menu de Contexto (Botão Direito) ---------- */
+            .menu-contexto {
+                position: absolute;
+                z-index: 1200;
+                background: var(--surface);
+                border: 1px solid var(--border-strong);
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+                border-radius: 8px;
+                padding: 5px 0;
+                min-width: 230px;
+                font-size: 12px;
+                font-family: inherit;
+                color: var(--ink);
+                display: flex;
+                flex-direction: column;
+                user-select: none;
+            }
+            .item-menu-contexto {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 14px;
+                cursor: pointer;
+                background: transparent;
+                border: none;
+                width: 100%;
+                text-align: left;
+                color: var(--ink);
+                font-size: 12px;
+                transition: background 0.15s;
+            }
+            .item-menu-contexto:hover:not(:disabled) {
+                background: var(--accent-soft);
+                color: var(--accent);
+            }
+            .item-menu-contexto:disabled {
+                opacity: 0.45;
+                cursor: not-allowed;
+            }
+            .versao-app {
+                font-size: 11px;
+                font-weight: 600;
+                font-family: "JetBrains Mono", monospace;
+                color: var(--ink-3);
+                opacity: 0.78;
+                padding: 1px 5px;
+                background: var(--surface-2);
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                user-select: none;
+            }
+            .divisor-menu-contexto {
+                height: 1px;
+                background: var(--border);
+                margin: 4px 0;
+            }
+            body.cursor-pan-global, body.cursor-pan-global * {
+                cursor: grab !important;
+            }
+            body.cursor-pan-global:active, body.cursor-pan-global *:active {
+                cursor: grabbing !important;
+            }
             body.modo-edicao-ativo #map {
                 cursor: crosshair;
             }
@@ -964,7 +1061,10 @@
                         />
                     </svg>
                     <div>
-                        <h1>SIG Salvação</h1>
+                        <div style="display: flex; align-items: baseline; gap: 8px;">
+                            <h1>SIG Salvação</h1>
+                            <span class="versao-app" id="appVersao">v1.3.2</span>
+                        </div>
                         <p>
                             Residencial Salvação · Santarém/PA · base CNEFE/IBGE
                             2022
@@ -1438,6 +1538,8 @@
 
                 <div class="mapa-wrap">
                     <div id="map"></div>
+                    <canvas id="canvasNumeracao" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 450;"></canvas>
+                    <div id="menuContextoMapa" class="menu-contexto" style="display: none;"></div>
                     <div id="marqueeBox" class="marcador-selecao-box" style="display: none;"></div>
                     <div id="barraFlutuanteSelecao" class="barra-flutuante-selecao" style="display: none;"></div>
                     <div id="bannerPreviewQuarteirao" class="banner-preview-quarteirao" style="display: none;">
@@ -1496,6 +1598,9 @@
             (() => {
                 "use strict";
                 const $ = (id) => document.getElementById(id);
+
+                // ============ Versão da Aplicação ============
+                const APP_VERSION = "1.3.2";
 
                 // ============ Parâmetros Configuráveis de Padronização (em metros) ============
                 const PADRAO_LARGURA_M = 8.0;           // Largura uniforme de cada lote (frente da casa)
@@ -1613,6 +1718,7 @@
                     dados: null,
                     indicador: null,
                     casaSelecionadaId: null,
+                    numeracaoCasas: localStorage.getItem("sig_salvacao_numeracao_casas") === "true",
                     // Modo Edição
                     modoEdicao: false,
                     ferramentaEdicao: "selecionar",
@@ -2798,11 +2904,9 @@
                         cRealce,
                     ].forEach((c) => c && map.removeLayer(c));
 
-                    const canvasCasas = L.canvas({ padding: 0.5 });
                     cCasas = L.geoJSON(
                         { type: "FeatureCollection", features: E.casas },
                         {
-                            renderer: canvasCasas,
                             style: estilo,
                             onEachFeature: (f, l) => {
                                 mapaCamadasCasas.set(f.properties.id, l);
@@ -2811,6 +2915,7 @@
                                     maxWidth: 300,
                                 });
                                 l.on("mouseover", () => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
                                     if (!E.modoEdicao) {
                                         l.setStyle({
                                             weight: 2,
@@ -2819,23 +2924,27 @@
                                     }
                                 });
                                 l.on("mouseout", () => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
                                     if (!E.modoEdicao) {
                                         l.setStyle(estilo(f));
                                     }
                                 });
                                 l.on("mousedown", (e) => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
                                     if (E.modoEdicao && E.ferramentaEdicao === "selecionar" && e.originalEvent && e.originalEvent.button === 0) {
                                         L.DomEvent.stopPropagation(e);
                                         aoMousedownCasaModoEdicao(f, e);
                                     }
                                 });
                                 l.on("click", (e) => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
                                     if (E.modoEdicao) {
                                         L.DomEvent.stopPropagation(e);
                                         map.closePopup();
                                         aoClicarCasaModoEdicao(f, e);
                                     } else {
                                         selecionarCasa(f);
+                                        l.openPopup(e.latlng || l.getBounds().getCenter());
                                     }
                                 });
                                 l.on("popupopen", () => {
@@ -2930,6 +3039,7 @@
 
                     sincronizarCamadas();
                     desenharDestaqueCasa();
+                    if (typeof desenharNumeracaoCasas === "function") desenharNumeracaoCasas();
                 }
 
                 // Contorno que marca qual casa está sendo consultada no momento. Não muda a
@@ -3331,6 +3441,7 @@
                     atualizarUIEdicao();
                     atualizarBotoesHistorico();
                     pintar();
+                    if (typeof desenharNumeracaoCasas === "function") desenharNumeracaoCasas();
                 }
 
                 // ============ Padronização dos Lotes (Metros / EPSG:3857) ============
@@ -3687,7 +3798,461 @@
                     if (E.selecionadas.size < 2) return;
                     const calc = calcularQuarteiraoPadronizado(E.selecionadas);
                     if (!calc) return;
+                    calc.tipo = "quarteirao";
+                    calc.titulo = `Pré-visualização Quarteirão: ${calc.totalCasas} casas (${calc.n1} na Face A, ${calc.n2} na Face B)`;
+                    iniciarPreviewAcao(calc);
+                }
 
+                function confirmarAgrupamentoQuarteirao() {
+                    confirmarPreviewAcao();
+                }
+
+                function cancelarPreviewQuarteirao() {
+                    cancelarPreviewAcao();
+                }
+
+                // ============ Numeração das Casas em Canvas ============
+                function ocultarNumeracaoCanvas() {
+                    const canvas = $("canvasNumeracao");
+                    if (!canvas) return;
+                    const ctx = canvas.getContext("2d");
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+
+                function desenharNumeracaoCasas() {
+                    const canvas = $("canvasNumeracao");
+                    if (!canvas) return;
+                    const mapEl = map.getContainer();
+                    const w = mapEl.clientWidth;
+                    const h = mapEl.clientHeight;
+                    if (!w || !h) return;
+
+                    const dpr = window.devicePixelRatio || 1;
+                    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+                        canvas.width = Math.round(w * dpr);
+                        canvas.height = Math.round(h * dpr);
+                    }
+                    const ctx = canvas.getContext("2d");
+                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    ctx.clearRect(0, 0, w, h);
+
+                    if (!E.numeracaoCasas) return;
+                    const zoom = map.getZoom();
+                    if (zoom < 18) return; // Legível apenas em zoom >= 18
+
+                    const bounds = map.getBounds();
+                    const fontSize = Math.max(9, Math.round(8.5 + (zoom - 18) * 3));
+                    ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+
+                    const isDark = temaEscuro;
+                    const textColor = isDark ? "#ffffff" : "#111827";
+                    const strokeColor = isDark ? "rgba(0,0,0,0.92)" : "rgba(255,255,255,0.96)";
+
+                    for (const f of E.casas) {
+                        const num = f.properties.numero;
+                        if (!num) continue;
+                        const anel = (E.posicao === "uniforme" && f.properties._anelUni) ? f.properties._anelUni : f.geometry.coordinates[0];
+                        if (!anel || anel.length < 3) continue;
+
+                        // Posição sempre calculada a partir do centróide geométrico atualizado
+                        const c = centroide(anel);
+                        const latLng = L.latLng(c[1], c[0]);
+                        if (!bounds.contains(latLng)) continue;
+
+                        const pt = map.latLngToContainerPoint(latLng);
+                        if (pt.x < -30 || pt.x > w + 30 || pt.y < -30 || pt.y > h + 30) continue;
+
+                        // Determina as dimensões na tela do polígono para evitar que o número ultrapasse as bordas
+                        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                        for (let i = 0; i < anel.length - 1; i++) {
+                            const pSc = map.latLngToContainerPoint([anel[i][1], anel[i][0]]);
+                            if (pSc.x < minX) minX = pSc.x;
+                            if (pSc.x > maxX) maxX = pSc.x;
+                            if (pSc.y < minY) minY = pSc.y;
+                            if (pSc.y > maxY) maxY = pSc.y;
+                        }
+                        const polyW = maxX - minX;
+                        const polyH = maxY - minY;
+                        const menorDimensao = Math.min(polyW, polyH);
+
+                        const textMetrics = ctx.measureText(num);
+                        // Se o número não couber com folga dentro do polígono, oculta-o para não sobrepor outros
+                        if (textMetrics.width > menorDimensao * 0.88 || fontSize > Math.max(polyW, polyH) * 0.85) {
+                            continue;
+                        }
+
+                        ctx.lineWidth = 2.5;
+                        ctx.strokeStyle = strokeColor;
+                        ctx.strokeText(num, pt.x, pt.y);
+                        ctx.fillStyle = textColor;
+                        ctx.fillText(num, pt.x, pt.y);
+                    }
+                }
+
+                function alternarNumeracaoCasas() {
+                    E.numeracaoCasas = !E.numeracaoCasas;
+                    localStorage.setItem("sig_salvacao_numeracao_casas", String(E.numeracaoCasas));
+                    desenharNumeracaoCasas();
+                    st(`Numeração das casas <b>${E.numeracaoCasas ? "ativada" : "desativada"}</b>.`);
+                }
+
+                // ============ Alinhamentos, Nivelamento e Espaçamentos ============
+                let snapshotBaseEspacamento = null;
+                let historicoEspacamentoSalvo = false;
+
+                // Ajuste de reta / PCA das posições para encontrar o eixo principal da seleção
+                function calcularEixoPrincipalSelecao(features) {
+                    if (!features || features.length < 2) return 0;
+                    const pts = features.map((f) => {
+                        const c = centroide(f.properties._anelUni);
+                        return L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
+                    });
+                    const m = pts.length;
+                    const mx = pts.reduce((s, p) => s + p.x, 0) / m;
+                    const my = pts.reduce((s, p) => s + p.y, 0) / m;
+
+                    let sxx = 0, syy = 0, sxy = 0;
+                    for (const p of pts) {
+                        const dx = p.x - mx;
+                        const dy = p.y - my;
+                        sxx += dx * dx;
+                        syy += dy * dy;
+                        sxy += dx * dy;
+                    }
+                    return 0.5 * Math.atan2(2 * sxy, sxx - syy);
+                }
+
+                // 1. Nivelar na horizontal (ajustar rotação da seleção como um bloco)
+                function calcularNivelamentoHorizontal(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+                    // Rotação mínima para nivelar o eixo à horizontal: delta = -theta
+                    const deltaRad = -theta;
+                    const deltaDeg = Number(((deltaRad * 180) / Math.PI).toFixed(1));
+
+                    const resultadoAjustes = new Map();
+                    for (const f of feats) {
+                        const id = f.properties.id;
+                        const startRing = f.properties._anelUni;
+                        const novoAnel = aplicarRotacaoMetros(startRing, centroMetros, deltaRad);
+                        const cLL = centroide(novoAnel);
+                        const prevRot = (E.ajustes[id] && E.ajustes[id].rot_deg) || 0;
+                        resultadoAjustes.set(id, {
+                            lng: Number(cLL[0].toFixed(7)),
+                            lat: Number(cLL[1].toFixed(7)),
+                            rot_deg: Number(((prevRot + deltaDeg) % 360).toFixed(1)),
+                            coords: novoAnel,
+                            grupo_id: obterIdGrupo(id)
+                        });
+                    }
+                    return {
+                        tipo: "nivelar",
+                        titulo: `Pré-visualização: Nivelar na horizontal (${feats.length} casas, rotação ${deltaDeg > 0 ? "+" : ""}${deltaDeg}°)`,
+                        resultadoAjustes,
+                        totalCasas: feats.length
+                    };
+                }
+
+                // 2. Alinhar em uma única linha horizontal
+                function calcularAlinhamentoLinha(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+
+                    // Eixo unitário ao longo da reta principal
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    if (ux < 0 || (ux === 0 && uy < 0)) { ux = -ux; uy = -uy; } // Orientação consistente
+
+                    // Projeta cada casa ao longo do eixo u para definir a ordem
+                    const casasOrdenadas = feats.map((f) => {
+                        const c = centroide(f.properties._anelUni);
+                        const pMetros = L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
+                        const t = (pMetros.x - centroMetros.x) * ux + (pMetros.y - centroMetros.y) * uy;
+                        return { f, t };
+                    }).sort((a, b) => a.t - b.t).map((it) => it.f);
+
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+                    const S = PADRAO_ESPACAMENTO_M;
+                    const passo = W + S;
+                    const m = casasOrdenadas.length;
+                    const x0 = centroMetros.x - ((m - 1) / 2) * passo;
+
+                    const resultadoAjustes = new Map();
+                    casasOrdenadas.forEach((f, k) => {
+                        const id = f.properties.id;
+                        const cx = x0 + k * passo;
+                        const cy = centroMetros.y;
+                        const hw = W / 2;
+                        const hd = D / 2;
+
+                        // Retângulo reto (orientação padrão)
+                        const ringMetros = [
+                            [cx - hw, cy - hd],
+                            [cx + hw, cy - hd],
+                            [cx + hw, cy + hd],
+                            [cx - hw, cy + hd],
+                            [cx - hw, cy - hd]
+                        ];
+                        const coords = ringMetros.map(([mx, my]) => {
+                            const ll = L.CRS.EPSG3857.unproject(L.point(mx, my));
+                            return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                        });
+                        const cLL = centroide(coords);
+                        resultadoAjustes.set(id, {
+                            lng: Number(cLL[0].toFixed(7)),
+                            lat: Number(cLL[1].toFixed(7)),
+                            rot_deg: 0,
+                            coords: coords,
+                            grupo_id: obterIdGrupo(id)
+                        });
+                    });
+
+                    return {
+                        tipo: "linha",
+                        titulo: `Pré-visualização: Alinhar em uma linha (${m} casas alinhadas na horizontal)`,
+                        resultadoAjustes,
+                        totalCasas: m
+                    };
+                }
+
+                // ============ Modelo Determinístico de Espaçamento H e V ============
+                function prepararSnapshotEspacamento() {
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) {
+                        snapshotBaseEspacamento = null;
+                        historicoEspacamentoSalvo = false;
+                        return null;
+                    }
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    if (ux < 0 || (ux === 0 && uy < 0)) { ux = -ux; uy = -uy; }
+                    const nx = -uy;
+                    const ny = ux;
+
+                    // Projeção dos centros de cada lote no sistema coordenado da fileira (u, n)
+                    const itens = feats.map((f) => {
+                        const c = centroide(f.properties._anelUni);
+                        const pM = L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
+                        const t = (pM.x - centroMetros.x) * ux + (pM.y - centroMetros.y) * uy;
+                        const d = (pM.x - centroMetros.x) * nx + (pM.y - centroMetros.y) * ny;
+                        return {
+                            id: f.properties.id,
+                            f,
+                            t,
+                            d,
+                            pM,
+                            coordsBase: JSON.parse(JSON.stringify(f.properties._anelUni)),
+                            rotBase: (E.ajustes[f.properties.id] && E.ajustes[f.properties.id].rot_deg) || 0
+                        };
+                    });
+
+                    // Identifica se há 2 fileiras paralelas
+                    const dVals = itens.map((it) => it.d);
+                    const minD = Math.min(...dVals);
+                    const maxD = Math.max(...dVals);
+                    const temDuasFileiras = (maxD - minD) > (PADRAO_PROFUNDIDADE_M * 0.4);
+
+                    let fileiras = [];
+                    if (temDuasFileiras) {
+                        const midD = (minD + maxD) / 2;
+                        const fil1 = itens.filter((it) => it.d <= midD).sort((a, b) => a.t - b.t);
+                        const fil2 = itens.filter((it) => it.d > midD).sort((a, b) => a.t - b.t);
+                        if (fil1.length) fileiras.push(fil1);
+                        if (fil2.length) fileiras.push(fil2);
+                    } else {
+                        fileiras.push(itens.sort((a, b) => a.t - b.t));
+                    }
+
+                    // Calcula o espaçamento horizontal real atual (entre bordas de lotes adjacentes: deltaT - W)
+                    let somasEspH = [];
+                    fileiras.forEach((fil) => {
+                        for (let k = 0; k < fil.length - 1; k++) {
+                            const distBordas = (fil[k + 1].t - fil[k].t) - PADRAO_LARGURA_M;
+                            somasEspH.push(distBordas);
+                        }
+                    });
+                    const espHMedio = somasEspH.length
+                        ? Math.max(0, somasEspH.reduce((a, b) => a + b, 0) / somasEspH.length)
+                        : PADRAO_ESPACAMENTO_M;
+
+                    // Calcula o espaçamento vertical real atual (entre bordas das duas fileiras: deltaD - D)
+                    let espVReal = 0;
+                    if (fileiras.length >= 2) {
+                        const mediaD1 = fileiras[0].reduce((s, it) => s + it.d, 0) / fileiras[0].length;
+                        const mediaD2 = fileiras[1].reduce((s, it) => s + it.d, 0) / fileiras[1].length;
+                        const distEntreFileiras = Math.abs(mediaD2 - mediaD1);
+                        espVReal = Math.max(0, distEntreFileiras - PADRAO_PROFUNDIDADE_M);
+                    }
+
+                    snapshotBaseEspacamento = {
+                        feats,
+                        centroMetros,
+                        ux,
+                        uy,
+                        nx,
+                        ny,
+                        fileiras,
+                        temDuasFileiras,
+                        espHAtual: Number(espHMedio.toFixed(1)),
+                        espVAtual: Number(espVReal.toFixed(1))
+                    };
+
+                    historicoEspacamentoSalvo = false;
+                    return snapshotBaseEspacamento;
+                }
+
+                function aplicarEspacamentoDeterministo(eixo, novoEspacamentoM) {
+                    if (!snapshotBaseEspacamento) {
+                        prepararSnapshotEspacamento();
+                    }
+                    if (!snapshotBaseEspacamento) return;
+
+                    const snap = snapshotBaseEspacamento;
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+
+                    // Registra no histórico uma única vez por sessão contínua de ajuste
+                    if (!historicoEspacamentoSalvo) {
+                        salvarSnapshotHistorico();
+                        historicoEspacamentoSalvo = true;
+                    }
+
+                    const valorAlvo = Math.max(0, novoEspacamentoM);
+
+                    if (eixo === "h") {
+                        snap.espHAtual = valorAlvo;
+                        const passo = W + valorAlvo;
+
+                        snap.fileiras.forEach((fil) => {
+                            if (fil.length < 2) return;
+                            const m = fil.length;
+                            const tMediaFil = fil.reduce((s, it) => s + it.t, 0) / m;
+                            const t0 = tMediaFil - ((m - 1) / 2) * passo;
+
+                            fil.forEach((it, idx) => {
+                                const targetT = t0 + idx * passo;
+                                const deltaT = targetT - it.t;
+                                const dx = deltaT * snap.ux;
+                                const dy = deltaT * snap.uy;
+                                const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
+
+                                const f = it.f;
+                                f.properties._anelUni = novoAnel;
+                                if (E.posicao === "uniforme") {
+                                    f.geometry.coordinates = [novoAnel];
+                                    f.properties._c = centroide(novoAnel);
+                                    const layer = mapaCamadasCasas.get(it.id);
+                                    if (layer) {
+                                        layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
+                                        layer.redraw();
+                                    }
+                                }
+                                const cLL = centroide(novoAnel);
+                                E.ajustes[it.id] = {
+                                    lng: Number(cLL[0].toFixed(7)),
+                                    lat: Number(cLL[1].toFixed(7)),
+                                    rot_deg: it.rotBase,
+                                    grupo_id: obterIdGrupo(it.id),
+                                    coords: novoAnel
+                                };
+                            });
+                        });
+                    } else if (eixo === "v") {
+                        if (!snap.temDuasFileiras || snap.fileiras.length < 2) {
+                            st("O espaçamento vertical requer duas fileiras paralelas na seleção.");
+                            return;
+                        }
+                        snap.espVAtual = valorAlvo;
+                        const distCentrosAlvo = D + valorAlvo;
+
+                        const fil1 = snap.fileiras[0];
+                        const fil2 = snap.fileiras[1];
+                        const mediaD1 = fil1.reduce((s, it) => s + it.d, 0) / fil1.length;
+                        const mediaD2 = fil2.reduce((s, it) => s + it.d, 0) / fil2.length;
+                        const dCentroFileiras = (mediaD1 + mediaD2) / 2;
+
+                        // Fileira 1 fica em -distCentrosAlvo/2 e Fileira 2 em +distCentrosAlvo/2 relativo ao centro
+                        const targetD1 = dCentroFileiras - distCentrosAlvo / 2;
+                        const targetD2 = dCentroFileiras + distCentrosAlvo / 2;
+                        const deltaD1 = targetD1 - mediaD1;
+                        const deltaD2 = targetD2 - mediaD2;
+
+                        fil1.forEach((it) => {
+                            const dx = deltaD1 * snap.nx;
+                            const dy = deltaD1 * snap.ny;
+                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
+                            const f = it.f;
+                            f.properties._anelUni = novoAnel;
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [novoAnel];
+                                f.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(it.id);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                            const cLL = centroide(novoAnel);
+                            E.ajustes[it.id] = {
+                                lng: Number(cLL[0].toFixed(7)),
+                                lat: Number(cLL[1].toFixed(7)),
+                                rot_deg: it.rotBase,
+                                grupo_id: obterIdGrupo(it.id),
+                                coords: novoAnel
+                            };
+                        });
+
+                        fil2.forEach((it) => {
+                            const dx = deltaD2 * snap.nx;
+                            const dy = deltaD2 * snap.ny;
+                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
+                            const f = it.f;
+                            f.properties._anelUni = novoAnel;
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [novoAnel];
+                                f.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(it.id);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                            const cLL = centroide(novoAnel);
+                            E.ajustes[it.id] = {
+                                lng: Number(cLL[0].toFixed(7)),
+                                lat: Number(cLL[1].toFixed(7)),
+                                rot_deg: it.rotBase,
+                                grupo_id: obterIdGrupo(it.id),
+                                coords: novoAnel
+                            };
+                        });
+                    }
+
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao(true); // Mantém foco e valores nos inputs
+                    desenharNumeracaoCasas();
+                    st(`Espaçamento ${eixo === "h" ? "horizontal" : "vertical"} ajustado para <b>${valorAlvo.toFixed(1).replace(".", ",")}m</b>.`);
+                }
+
+                // ============ Sistema Unificado de Pré-visualização ============
+                let previewAcaoAtiva = null;
+
+                function iniciarPreviewAcao(calc) {
+                    if (!calc) return;
+                    previewAcaoAtiva = calc;
                     previewQuarteiraoAtivo = calc;
                     cPreviewOverlay.clearLayers();
 
@@ -3709,34 +4274,38 @@
                         banner.style.display = "flex";
                         const txt = $("previewQuarteiraoTexto");
                         if (txt) {
-                            txt.innerHTML = `<b>Pré-visualização Quarteirão:</b> ${calc.totalCasas} casas (${calc.n1} na Face A, ${calc.n2} na Face B)`;
+                            txt.innerHTML = `<b>${calc.titulo || "Pré-visualização"}</b>`;
                         }
                     }
-                    st("<b>Pré-visualização gerada.</b> Verifique o alinhamento das duas fileiras e confirme ou cancele.");
+                    st("<b>Pré-visualização gerada.</b> Confirme para aplicar as alterações ou cancele.");
                 }
 
-                function confirmarAgrupamentoQuarteirao() {
-                    if (!previewQuarteiraoAtivo) return;
+                function confirmarPreviewAcao() {
+                    if (!previewAcaoAtiva) return;
                     salvarSnapshotHistorico();
 
-                    const calc = previewQuarteiraoAtivo;
-                    const novoGrpId = "quarteirao-" + Date.now();
+                    const calc = previewAcaoAtiva;
                     const ids = Array.from(calc.resultadoAjustes.keys());
 
-                    // Remove de grupos anteriores
-                    E.grupos = E.grupos
-                        .map((g) => ({
-                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
-                            tipo: g.tipo || "grupo",
-                            casas: (g.casas || g).filter((id) => !calc.resultadoAjustes.has(id))
-                        }))
-                        .filter((g) => g.casas.length >= 2);
+                    if (calc.tipo === "quarteirao") {
+                        const novoGrpId = "quarteirao-" + Date.now();
+                        E.grupos = E.grupos
+                            .map((g) => ({
+                                id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                                tipo: g.tipo || "grupo",
+                                casas: (g.casas || g).filter((id) => !calc.resultadoAjustes.has(id))
+                            }))
+                            .filter((g) => g.casas.length >= 2);
 
-                    E.grupos.push({
-                        id: novoGrpId,
-                        tipo: "quarteirao",
-                        casas: ids
-                    });
+                        E.grupos.push({
+                            id: novoGrpId,
+                            tipo: "quarteirao",
+                            casas: ids
+                        });
+                        for (const [id, ajust] of calc.resultadoAjustes) {
+                            ajust.grupo_id = novoGrpId;
+                        }
+                    }
 
                     for (const [id, ajust] of calc.resultadoAjustes) {
                         const item = mapaCasasPorId.get(id);
@@ -3756,24 +4325,44 @@
                             lng: ajust.lng,
                             lat: ajust.lat,
                             rot_deg: ajust.rot_deg,
-                            grupo_id: novoGrpId,
+                            grupo_id: ajust.grupo_id || obterIdGrupo(id),
                             coords: ajust.coords
                         };
                     }
 
-                    cancelarPreviewQuarteirao();
+                    const descAcao = calc.tipo === "quarteirao"
+                        ? `${ids.length} casas agrupadas em 2 fileiras paralelas`
+                        : (calc.tipo === "linha" ? `${ids.length} casas alinhadas em linha horizontal` : `${ids.length} casas niveladas na horizontal`);
+
+                    cancelarPreviewAcao();
                     marcarSalvo(false);
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
                     atualizarUIEdicao();
-                    st(`<b>Quarteirão padronizado aplicado:</b> ${ids.length} casas agrupadas em 2 fileiras paralelas.`);
+                    desenharNumeracaoCasas();
+                    st(`<b>Ação confirmada:</b> ${descAcao}.`);
                 }
 
-                function cancelarPreviewQuarteirao() {
+                function cancelarPreviewAcao() {
+                    previewAcaoAtiva = null;
                     previewQuarteiraoAtivo = null;
                     cPreviewOverlay.clearLayers();
                     const banner = $("bannerPreviewQuarteirao");
                     if (banner) banner.style.display = "none";
+                }
+
+                function iniciarNivelarHorizontal() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularNivelamentoHorizontal(E.selecionadas);
+                    if (!calc) return;
+                    iniciarPreviewAcao(calc);
+                }
+
+                function iniciarAlinharLinha() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularAlinhamentoLinha(E.selecionadas);
+                    if (!calc) return;
+                    iniciarPreviewAcao(calc);
                 }
 
                 // ============ Movimentação e Rotação ============
@@ -4260,11 +4849,36 @@
                         const podeAgrupar = E.selecionadas.size >= 2;
                         const algumEmGrupo = Array.from(E.selecionadas).some((id) => obterGrupo(id));
 
+                        if (!snapshotBaseEspacamento && podeAgrupar) {
+                            prepararSnapshotEspacamento();
+                        }
+                        const valHStr = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual.toFixed(1).replace(".", ",") : "1,0";
+                        const valVStr = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual.toFixed(1).replace(".", ",") : "0,0";
+
                         barra.innerHTML = `
                             <b>${E.selecionadas.size} casa(s)</b>
                             ${podeAgrupar ? '<button class="btn" id="btnFlutuanteAgrupar" title="Agrupar casas selecionadas">🔗 Agrupar</button>' : ""}
                             ${podeAgrupar ? '<button class="btn" id="btnFlutuanteQuarteirao" title="Organizar seleção em quarteirão padronizado">🏘️ Agrupar em quarteirão</button>' : ""}
                             ${algumEmGrupo ? '<button class="btn" id="btnFlutuanteDesagrupar" title="Desagrupar casas selecionadas">⛓️‍💥 Desagrupar</button>' : ""}
+                            ${podeAgrupar ? `
+                                <span class="divisor-flutuante"></span>
+                                <div class="grupo-input-flutuante" title="Espaçamento horizontal uniforme entre as bordas dos lotes (em metros)">
+                                    <span>↔ H:</span>
+                                    <button class="btn-micro" id="btnFlutuanteEspHMenos" title="Diminuir espaçamento horizontal">-</button>
+                                    <input type="text" id="inputFlutuanteEspH" value="${valHStr}" style="width:40px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspHMais" title="Aumentar espaçamento horizontal">+</button>
+                                    <span>m</span>
+                                </div>
+                                <span class="divisor-flutuante"></span>
+                                <div class="grupo-input-flutuante" title="Espaçamento vertical uniforme entre as bordas das fileiras (em metros)">
+                                    <span>↕ V:</span>
+                                    <button class="btn-micro" id="btnFlutuanteEspVMenos" title="Diminuir espaçamento vertical">-</button>
+                                    <input type="text" id="inputFlutuanteEspV" value="${valVStr}" style="width:40px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspVMais" title="Aumentar espaçamento vertical">+</button>
+                                    <span>m</span>
+                                </div>
+                            ` : ""}
+                            <span class="divisor-flutuante"></span>
                             <button class="btn" id="btnFlutuanteRotM15" title="Girar -15°">-15°</button>
                             <button class="btn" id="btnFlutuanteRotP15" title="Girar +15°">+15°</button>
                             <button class="btn" id="btnFlutuanteRestaurar" title="Restaurar ao padrão original">↺</button>
@@ -4276,6 +4890,66 @@
                         if (bQuart) bQuart.onclick = (e) => { e.stopPropagation(); iniciarAgrupamentoQuarteirao(); };
                         const bDes = $("btnFlutuanteDesagrupar");
                         if (bDes) bDes.onclick = (e) => { e.stopPropagation(); desagrupar(); };
+
+                        const parseValPtBr = (str) => {
+                            if (!str) return NaN;
+                            return parseFloat(str.trim().replace(",", "."));
+                        };
+
+                        const bHMenos = $("btnFlutuanteEspHMenos");
+                        const bHMais = $("btnFlutuanteEspHMais");
+                        const inH = $("inputFlutuanteEspH");
+                        if (bHMenos) bHMenos.onclick = (e) => {
+                            e.stopPropagation();
+                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual : 1.0;
+                            const novo = Math.max(0, Math.round((cur - 0.5) * 10) / 10);
+                            aplicarEspacamentoDeterministo("h", novo);
+                        };
+                        if (bHMais) bHMais.onclick = (e) => {
+                            e.stopPropagation();
+                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual : 1.0;
+                            const novo = Math.min(30, Math.round((cur + 0.5) * 10) / 10);
+                            aplicarEspacamentoDeterministo("h", novo);
+                        };
+                        if (inH) {
+                            inH.onclick = (e) => e.stopPropagation();
+                            inH.onchange = (e) => {
+                                const val = parseValPtBr(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                    aplicarEspacamentoDeterministo("h", val);
+                                } else {
+                                    inH.value = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual.toFixed(1).replace(".", ",") : "1,0";
+                                }
+                            };
+                        }
+
+                        const bVMenos = $("btnFlutuanteEspVMenos");
+                        const bVMais = $("btnFlutuanteEspVMais");
+                        const inV = $("inputFlutuanteEspV");
+                        if (bVMenos) bVMenos.onclick = (e) => {
+                            e.stopPropagation();
+                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual : 0.0;
+                            const novo = Math.max(0, Math.round((cur - 0.5) * 10) / 10);
+                            aplicarEspacamentoDeterministo("v", novo);
+                        };
+                        if (bVMais) bVMais.onclick = (e) => {
+                            e.stopPropagation();
+                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual : 0.0;
+                            const novo = Math.min(30, Math.round((cur + 0.5) * 10) / 10);
+                            aplicarEspacamentoDeterministo("v", novo);
+                        };
+                        if (inV) {
+                            inV.onclick = (e) => e.stopPropagation();
+                            inV.onchange = (e) => {
+                                const val = parseValPtBr(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                    aplicarEspacamentoDeterministo("v", val);
+                                } else {
+                                    inV.value = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual.toFixed(1).replace(".", ",") : "0,0";
+                                }
+                            };
+                        }
+
                         const bM15 = $("btnFlutuanteRotM15");
                         if (bM15) bM15.onclick = (e) => { e.stopPropagation(); rotacionarCasasSelecionadas(-15); };
                         const bP15 = $("btnFlutuanteRotP15");
@@ -4286,6 +4960,8 @@
                 }
 
                 function atualizarSelecao() {
+                    snapshotBaseEspacamento = null;
+                    historicoEspacamentoSalvo = false;
                     atualizarOverlayEdicao();
                     atualizarUIEdicao();
                     pintar();
@@ -4368,28 +5044,119 @@
                     }
                 }
 
-                // ============ Eventos de Arrastar, Rotacionar e Selecionar por Área ============
+                // ============ Eventos de Arrastar, Rotacionar, Pan e Menu de Contexto ============
                 let boxAtiva = false;
                 let boxStartPoint = null;
-                let panDireitoAtivo = false;
-                let panStartClient = [0, 0];
                 let segurandoEspaco = false;
+                let panMeioAtivo = false;
+                let panMeioStartClient = [0, 0];
 
                 const mapEl = map.getContainer();
 
+                function limparEstadoPanEspaco() {
+                    segurandoEspaco = false;
+                    if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
+                        map.dragging.disable();
+                    }
+                    document.body.classList.remove("cursor-pan-global");
+                    mapEl.classList.remove("cursor-pan");
+                }
+
+                function limparEstadoPanMeio() {
+                    panMeioAtivo = false;
+                    document.body.classList.remove("cursor-pan-global");
+                    mapEl.classList.remove("cursor-pan");
+                }
+
+                function fecharMenuContexto() {
+                    const menu = $("menuContextoMapa");
+                    if (menu) menu.style.display = "none";
+                }
+
+                function abrirMenuContexto(e) {
+                    const menu = $("menuContextoMapa");
+                    if (!menu) return;
+                    const podeAcaoSel = E.selecionadas.size >= 2;
+
+                    menu.innerHTML = `
+                        <button class="item-menu-contexto" id="itemMenuNumCasas">
+                            <span>🔢</span>
+                            <span>${E.numeracaoCasas ? "Desativar numeração das casas" : "Ativar numeração das casas"}</span>
+                        </button>
+                        <div class="divisor-menu-contexto"></div>
+                        <button class="item-menu-contexto" id="itemMenuNivelar" ${!podeAcaoSel ? "disabled" : ""} title="${!podeAcaoSel ? 'Selecione ao menos 2 casas' : 'Gira a seleção como um bloco até a fileira ficar horizontal'}">
+                            <span>📐</span>
+                            <span>Nivelar na horizontal (ajustar rotação)</span>
+                        </button>
+                        <button class="item-menu-contexto" id="itemMenuAlinharLinha" ${!podeAcaoSel ? "disabled" : ""} title="${!podeAcaoSel ? 'Selecione ao menos 2 casas' : 'Reorganiza os polígonos em uma única linha horizontal padronizada'}">
+                            <span>📏</span>
+                            <span>Alinhar em uma linha</span>
+                        </button>
+                    `;
+
+                    menu.style.display = "flex";
+                    const rect = mapEl.getBoundingClientRect();
+                    let x = e.clientX - rect.left;
+                    let y = e.clientY - rect.top;
+
+                    const menuW = 230;
+                    const menuH = 140;
+                    if (x + menuW > rect.width) x = Math.max(10, rect.width - menuW - 10);
+                    if (y + menuH > rect.height) y = Math.max(10, rect.height - menuH - 10);
+
+                    menu.style.left = x + "px";
+                    menu.style.top = y + "px";
+
+                    $("itemMenuNumCasas").onclick = (ev) => {
+                        ev.stopPropagation();
+                        fecharMenuContexto();
+                        alternarNumeracaoCasas();
+                    };
+
+                    const btnNivelar = $("itemMenuNivelar");
+                    if (btnNivelar && podeAcaoSel) {
+                        btnNivelar.onclick = (ev) => {
+                            ev.stopPropagation();
+                            fecharMenuContexto();
+                            iniciarNivelarHorizontal();
+                        };
+                    }
+
+                    const btnLinha = $("itemMenuAlinharLinha");
+                    if (btnLinha && podeAcaoSel) {
+                        btnLinha.onclick = (ev) => {
+                            ev.stopPropagation();
+                            fecharMenuContexto();
+                            iniciarAlinharLinha();
+                        };
+                    }
+                }
+
+                // Previne autoscroll no botão do meio
+                window.addEventListener("auxclick", (e) => {
+                    if (e.button === 1) e.preventDefault();
+                });
+
                 mapEl.addEventListener("mousedown", (e) => {
-                    // Pan com botão direito
-                    if (e.button === 2) {
-                        panDireitoAtivo = true;
-                        panStartClient = [e.clientX, e.clientY];
-                        mapEl.classList.add("cursor-pan");
+                    // Pan com botão do meio (botão 1)
+                    if (e.button === 1) {
                         e.preventDefault();
+                        panMeioAtivo = true;
+                        panMeioStartClient = [e.clientX, e.clientY];
+                        mapEl.classList.add("cursor-pan");
+                        document.body.classList.add("cursor-pan-global");
+                        fecharMenuContexto();
+                        return;
+                    }
+
+                    // Se estiver com Espaço segurado, não faz seleção
+                    if (segurandoEspaco) {
                         return;
                     }
 
                     // Seleção por retângulo em área vazia (botão esquerdo)
                     if (E.modoEdicao && E.ferramentaEdicao === "selecionar" && e.button === 0 && !arrastoEmAndamento && !rotacionandoEmAndamento) {
-                        if (e.target.closest(".leaflet-interactive") || e.target.closest(".barra-flutuante-selecao") || e.target.closest(".banner-preview-quarteirao") || e.target.closest(".leaflet-control")) {
+                        if (e.target.closest(".leaflet-interactive") || e.target.closest(".barra-flutuante-selecao") || e.target.closest(".banner-preview-quarteirao") || e.target.closest(".leaflet-control") || e.target.closest(".menu-contexto")) {
                             return;
                         }
                         boxAtiva = true;
@@ -4398,12 +5165,17 @@
                 });
 
                 window.addEventListener("mousemove", (e) => {
-                    // Pan com botão direito
-                    if (panDireitoAtivo) {
-                        const dx = e.clientX - panStartClient[0];
-                        const dy = e.clientY - panStartClient[1];
-                        panStartClient = [e.clientX, e.clientY];
+                    // Pan com botão do meio
+                    if (panMeioAtivo) {
+                        const dx = e.clientX - panMeioStartClient[0];
+                        const dy = e.clientY - panMeioStartClient[1];
+                        panMeioStartClient = [e.clientX, e.clientY];
                         map.panBy([-dx, -dy], { animate: false });
+                        return;
+                    }
+
+                    // Se pan por Espaço estiver ativo, ignora hover e seleção
+                    if (segurandoEspaco) {
                         return;
                     }
 
@@ -4492,12 +5264,10 @@
                 });
 
                 window.addEventListener("mouseup", (e) => {
-                    // Fim do Pan com botão direito
-                    if (panDireitoAtivo && e.button === 2) {
-                        panDireitoAtivo = false;
-                        if (!segurandoEspaco && E.ferramentaEdicao !== "pan") {
-                            mapEl.classList.remove("cursor-pan");
-                        }
+                    // Fim do Pan com botão do meio
+                    if (panMeioAtivo && e.button === 1) {
+                        limparEstadoPanMeio();
+                        return;
                     }
 
                     // Fim do arrasto de casas
@@ -4528,6 +5298,7 @@
                                 marcarSalvo(false);
                                 salvarLocalStorage();
                                 atualizarUIEdicao();
+                                desenharNumeracaoCasas();
                                 st("Casas reposicionadas com sucesso.");
                             }
                         }
@@ -4557,6 +5328,7 @@
                             marcarSalvo(false);
                             salvarLocalStorage();
                             atualizarUIEdicao();
+                            desenharNumeracaoCasas();
                             st(`Seleção rotacionada em <b>${rotDeltaDeg > 0 ? "+" : ""}${rotDeltaDeg}°</b>.`);
                         }
                         rotDeltaDeg = 0;
@@ -4594,7 +5366,7 @@
                             atualizarSelecao();
                         } else if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
                             // Clique simples em área vazia limpa seleção
-                            if (!e.target.closest(".leaflet-interactive") && !e.target.closest(".barra-flutuante-selecao") && !e.target.closest(".banner-preview-quarteirao") && !e.target.closest(".leaflet-control")) {
+                            if (!e.target.closest(".leaflet-interactive") && !e.target.closest(".barra-flutuante-selecao") && !e.target.closest(".banner-preview-quarteirao") && !e.target.closest(".leaflet-control") && !e.target.closest(".menu-contexto")) {
                                 if (E.selecionadas.size > 0) {
                                     E.selecionadas.clear();
                                     atualizarSelecao();
@@ -4605,10 +5377,36 @@
                     }
                 });
 
+                // Menu de contexto com botão direito
                 mapEl.addEventListener("contextmenu", (e) => {
-                    if (E.modoEdicao || panDireitoAtivo) {
-                        e.preventDefault();
+                    e.preventDefault();
+                    if (segurandoEspaco || panMeioAtivo) return;
+                    abrirMenuContexto(e);
+                });
+
+                window.addEventListener("click", (e) => {
+                    if (!e.target.closest("#menuContextoMapa")) {
+                        fecharMenuContexto();
                     }
+                });
+
+                window.addEventListener("blur", () => {
+                    limparEstadoPanEspaco();
+                    limparEstadoPanMeio();
+                    fecharMenuContexto();
+                });
+
+                document.addEventListener("visibilitychange", () => {
+                    if (document.hidden) {
+                        limparEstadoPanEspaco();
+                        limparEstadoPanMeio();
+                        fecharMenuContexto();
+                    }
+                });
+
+                mapEl.addEventListener("mouseleave", () => {
+                    limparEstadoPanEspaco();
+                    limparEstadoPanMeio();
                 });
 
                 // Atalhos de teclado
@@ -4624,16 +5422,19 @@
                         refazer();
                         return;
                     }
-                    if (e.code === "Space" && E.modoEdicao && document.activeElement.tagName !== "INPUT") {
+                    if (e.code === "Space" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") {
                         if (!segurandoEspaco) {
                             segurandoEspaco = true;
                             map.dragging.enable();
                             mapEl.classList.add("cursor-pan");
+                            document.body.classList.add("cursor-pan-global");
                         }
+                        e.preventDefault();
                     }
                     if (e.key === "Escape") {
-                        if (previewQuarteiraoAtivo) {
-                            cancelarPreviewQuarteirao();
+                        fecharMenuContexto();
+                        if (previewAcaoAtiva || previewQuarteiraoAtivo) {
+                            cancelarPreviewAcao();
                             return;
                         }
                         if (E.modoEdicao) {
@@ -4645,15 +5446,26 @@
 
                 document.addEventListener("keyup", (e) => {
                     if (e.code === "Space") {
-                        segurandoEspaco = false;
-                        if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
-                            map.dragging.disable();
-                        }
-                        mapEl.classList.remove("cursor-pan");
+                        limparEstadoPanEspaco();
                     }
                 });
 
-                map.on("moveend zoomend", () => {
+                map.on("zoomstart zoomanim", () => {
+                    if (typeof ocultarNumeracaoCanvas === "function") {
+                        ocultarNumeracaoCanvas();
+                    }
+                });
+
+                map.on("move", () => {
+                    if (!map._animatingZoom && typeof desenharNumeracaoCasas === "function") {
+                        desenharNumeracaoCasas();
+                    }
+                });
+
+                map.on("zoomend moveend viewreset resize", () => {
+                    if (typeof desenharNumeracaoCasas === "function") {
+                        desenharNumeracaoCasas();
+                    }
                     if (E.modoEdicao && E.selecionadas.size > 0) {
                         atualizarOverlayEdicao();
                     }
