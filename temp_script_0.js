@@ -1,0 +1,4260 @@
+
+            (() => {
+                "use strict";
+                const $ = (id) => document.getElementById(id);
+
+                // ============ Versão da Aplicação ============
+                const APP_VERSION = "1.3.4";
+
+                // ============ Parâmetros Configuráveis de Padronização (em metros) ============
+                const PADRAO_LARGURA_M = 8.0;           // Largura uniforme de cada lote (frente da casa)
+                const PADRAO_PROFUNDIDADE_M = 16.0;      // Profundidade uniforme de cada lote
+                const PADRAO_ESPACAMENTO_M = 1.0;        // Espaçamento uniforme entre lotes vizinhos na mesma fileira
+                const PADRAO_INTERVALO_FILEIRAS_M = 3.0; // Intervalo (afastamento) uniforme entre as duas fileiras da quadra
+
+                /* ============ Tema ============ */
+                const ICO = {
+                    sol: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7"/>',
+                    lua: '<path d="M20.5 14.2A8.6 8.6 0 1 1 9.8 3.5a6.9 6.9 0 0 0 10.7 10.7z"/>',
+                };
+                let temaEscuro = window.matchMedia(
+                    "(prefers-color-scheme: dark)",
+                ).matches;
+                function aplicarTema() {
+                    document.documentElement.dataset.theme = temaEscuro
+                        ? "dark"
+                        : "light";
+                    $("icoTema").innerHTML = temaEscuro ? ICO.sol : ICO.lua;
+                    if (typeof trocarBase === "function") trocarBase(baseAtual);
+                    // redesenha as camadas: rótulos, contornos e pontos carregam cores fixas do tema
+                    if (typeof desenhar === "function" && cCasas) {
+                        const sel = E.selec;
+                        desenhar();
+                        desenharLegenda();
+                        desenharLista();
+                        E.selec = sel;
+                        pintar();
+                    }
+                }
+                $("btnTema").addEventListener("click", () => {
+                    temaEscuro = !temaEscuro;
+                    aplicarTema();
+                });
+
+                /* ============ Mapa ============ */
+                const map = L.map("map", {
+                    preferCanvas: true,
+                    zoomControl: false,
+                    minZoom: 13,
+                    maxZoom: 20,
+                }).setView([-2.46, -54.7625], 15);
+                L.control.zoom({ position: "bottomright" }).addTo(map);
+                L.control
+                    .scale({ imperial: false, position: "bottomright" })
+                    .addTo(map);
+
+                const BASES = {
+                    sat: () =>
+                        L.tileLayer(
+                            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                            {
+                                maxZoom: 20,
+                                maxNativeZoom: 17,
+                                attribution:
+                                    "Imagens Esri, Maxar, Earthstar Geographics",
+                            },
+                        ),
+                    ruas: () =>
+                        L.tileLayer(
+                            "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                            {
+                                maxZoom: 20,
+                                maxNativeZoom: 18,
+                                attribution: "&copy; OpenStreetMap",
+                            },
+                        ),
+                    limpo: () =>
+                        L.tileLayer(
+                            `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${temaEscuro ? "Dark" : "Light"}_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+                            {
+                                maxZoom: 20,
+                                maxNativeZoom: 16,
+                                attribution:
+                                    "Esri, HERE, Garmin, &copy; OpenStreetMap",
+                            },
+                        ),
+                };
+                let camadaBase = null,
+                    baseAtual = "sat";
+                function trocarBase(v) {
+                    baseAtual = v;
+                    if (camadaBase) map.removeLayer(camadaBase);
+                    camadaBase = BASES[v]().addTo(camadaBase ? map : map);
+                    camadaBase.bringToBack();
+                }
+                trocarBase("sat");
+
+                /* ============ Paleta ============ */
+                // 12 matizes bem separados, legíveis sobre satélite e em ambos os temas
+                const MATIZES = [
+                    8, 32, 58, 92, 128, 158, 186, 212, 242, 272, 302, 332,
+                ];
+                const cor = (i, l, c) =>
+                    `oklch(${l}% ${c} ${MATIZES[i % MATIZES.length]})`;
+                const corQuadra = (i) => cor(i, temaEscuro ? 66 : 58, 0.155);
+                const COR_OUTROS = () =>
+                    temaEscuro ? "oklch(72% .015 160)" : "oklch(52% .012 160)";
+                const traco = () =>
+                    temaEscuro
+                        ? "oklch(14% .01 160/.85)"
+                        : "oklch(20% .015 160/.7)";
+
+                /* ============ Estado ============ */
+                const E = {
+                    casas: [],
+                    outros: [],
+                    quadras: [],
+                    ruas: [],
+                    criterio: "quadra",
+                    posicao: "uniforme",
+                    selec: null,
+                    opac: 0.8,
+                    dados: null,
+                    indicador: null,
+                    casaSelecionadaId: null,
+                    numeracaoCasas: localStorage.getItem("sig_salvacao_numeracao_casas") === "true",
+                    // Modo Edição
+                    modoEdicao: false,
+                    ferramentaEdicao: "selecionar",
+                    selecionadas: new Set(),
+                    grupos: [],
+                    ajustes: {},
+                    alteracoesSalvas: true,
+                };
+                let cCasas = null,
+                    cPontos = null,
+                    cOutros = null,
+                    cContorno = null,
+                    cRotulos = null,
+                    cRealce = null,
+                    cDestaqueCasa = null;
+
+                const st = (msg) => {
+                    $("status").innerHTML = msg;
+                };
+
+                /* ============ Geometria ============ */
+                function centroide(ring) {
+                    let x = 0,
+                        y = 0,
+                        a = 0;
+                    for (
+                        let i = 0, j = ring.length - 2;
+                        i < ring.length - 1;
+                        j = i++
+                    ) {
+                        const [x0, y0] = ring[j],
+                            [x1, y1] = ring[i];
+                        const f = x0 * y1 - x1 * y0;
+                        a += f;
+                        x += (x0 + x1) * f;
+                        y += (y0 + y1) * f;
+                    }
+                    if (Math.abs(a) < 1e-14) {
+                        const n = ring.length - 1;
+                        return [
+                            ring.slice(0, n).reduce((s, p) => s + p[0], 0) / n,
+                            ring.slice(0, n).reduce((s, p) => s + p[1], 0) / n,
+                        ];
+                    }
+                    a *= 3;
+                    return [x / a, y / a];
+                }
+                // Casco convexo (Andrew monotone chain) para o contorno do quarteirão
+                function casco(pts) {
+                    const p = [...pts].sort(
+                        (a, b) => a[0] - b[0] || a[1] - b[1],
+                    );
+                    if (p.length < 3) return p;
+                    const cruz = (o, a, b) =>
+                        (a[0] - o[0]) * (b[1] - o[1]) -
+                        (a[1] - o[1]) * (b[0] - o[0]);
+                    const meio = (arr) => {
+                        const h = [];
+                        for (const q of arr) {
+                            while (
+                                h.length >= 2 &&
+                                cruz(h[h.length - 2], h[h.length - 1], q) <= 0
+                            )
+                                h.pop();
+                            h.push(q);
+                        }
+                        return h;
+                    };
+                    const inf = meio(p),
+                        sup = meio([...p].reverse());
+                    return [...inf.slice(0, -1), ...sup.slice(0, -1)];
+                }
+
+                /* ============ Carregar dados ============ */
+                fetch("dados/casas_salvacao.geojson")
+                    .then((r) => {
+                        if (!r.ok) throw new Error("HTTP " + r.status);
+                        return r.json();
+                    })
+                    .then((gj) => {
+                        montar(gj);
+                    })
+                    .catch((err) => {
+                        $("carregando").innerHTML =
+                            `<div class="miolo"><p class="nota" style="max-width:40ch;text-align:center">
+        Não foi possível carregar <b>dados/casas_salvacao.geojson</b>.<br>${err.message}
+      </p></div>`;
+                    });
+
+                function montar(gj) {
+                    E.dados = gj;
+                    E.casas = gj.features.filter(
+                        (f) => f.properties.tipo === "domicilio",
+                    );
+                    // Prepara geometrias padronizadas e preserva atributos intactos do IBGE
+                    for (const f of E.casas) {
+                        const anelIBGE = f.geometry.coordinates[0];
+                        f.properties._anelRealOrig = JSON.parse(JSON.stringify(anelIBGE));
+                        f.properties._anelReal = JSON.parse(JSON.stringify(anelIBGE));
+                        const anelBase = f.properties.anel_uniforme || anelIBGE;
+                        const anelStd = gerarLotePadronizado(anelBase, PADRAO_LARGURA_M, PADRAO_PROFUNDIDADE_M);
+                        f.properties._anelUni = anelStd;
+                        f.properties._anelUniBase = JSON.parse(JSON.stringify(anelStd));
+                        // Inicializa na visualização padrão ("Lotes iguais")
+                        f.geometry.coordinates = [anelStd];
+                        mapaCasasPorId.set(f.properties.id, f);
+                    }
+                    E.outros = gj.features.filter(
+                        (f) => f.properties.tipo !== "domicilio",
+                    );
+                    for (const f of E.casas) {
+                        const moradores = gerarMoradores(f);
+                        f.properties.indicadores_mock = gerarIndicadoresMock(
+                            f,
+                            moradores,
+                        );
+                        atribuirFichas(f, moradores);
+                        f.properties._moradoresCache = moradores;
+                    }
+
+                    // agrupa por quadra
+                    const mapaQ = new Map();
+                    for (const f of E.casas) {
+                        const p = f.properties,
+                            k = `${p.setor}|${p.quadra}`;
+                        if (!mapaQ.has(k))
+                            mapaQ.set(k, {
+                                chave: k,
+                                setor: p.setor,
+                                quadra: p.quadra,
+                                casas: [],
+                                faces: new Map(),
+                                ruas: new Map(),
+                            });
+                        const q = mapaQ.get(k);
+                        q.casas.push(f);
+                        if (!q.faces.has(p.face)) q.faces.set(p.face, []);
+                        q.faces.get(p.face).push(f);
+                        q.ruas.set(p.rua, (q.ruas.get(p.rua) || 0) + 1);
+                        p._c = centroide(f.geometry.coordinates[0]);
+                    }
+                    E.quadras = [...mapaQ.values()];
+                    // ordena de norte para sul, depois oeste para leste (leitura natural do bairro)
+                    E.quadras.forEach((q) => {
+                        const cs = q.casas.map((f) => f.properties._c);
+                        q.lng = cs.reduce((s, c) => s + c[0], 0) / cs.length;
+                        q.lat = cs.reduce((s, c) => s + c[1], 0) / cs.length;
+                        q.ruaPrinc = [...q.ruas.entries()].sort(
+                            (a, b) => b[1] - a[1],
+                        )[0][0];
+                        q.contorno = casco(
+                            q.casas.flatMap((f) =>
+                                f.geometry.coordinates[0].slice(0, -1),
+                            ),
+                        );
+                    });
+                    E.quadras.sort((a, b) => b.lat - a.lat || a.lng - b.lng);
+                    E.quadras.forEach((q, i) => {
+                        q.idx = i;
+                        q.nome = `Q${String(i + 1).padStart(2, "0")}`;
+                        q.casas.forEach((f) => {
+                            f.properties._qi = i;
+                            f.properties._qn = q.nome;
+                        });
+                    });
+
+                    // faces e ruas globais
+                    const setFaces = new Set(
+                        E.casas.map(
+                            (f) =>
+                                `${f.properties.setor}|${f.properties.quadra}|${f.properties.face}`,
+                        ),
+                    );
+                    E.ruas = [
+                        ...new Set(E.casas.map((f) => f.properties.rua)),
+                    ].sort((a, b) => a.localeCompare(b, "pt-BR"));
+                    E.ruaIdx = new Map(E.ruas.map((r, i) => [r, i]));
+
+                    $("kpiCasas").textContent =
+                        E.casas.length.toLocaleString("pt-BR");
+                    $("kpiQuadras").textContent = E.quadras.length;
+                    $("kpiFaces").textContent = setFaces.size;
+                    $("kpiOutros").textContent = E.outros.length;
+
+                    preencherRuas();
+                    desenharLista();
+                    desenharLegenda();
+                    desenhar();
+                    map.fitBounds(cCasas.getBounds(), { padding: [26, 26] });
+                    $("carregando").remove();
+                    st(
+                        `<b>${E.casas.length.toLocaleString("pt-BR")}</b> casas desenhadas em <b>${E.quadras.length}</b> quarteirões e ${setFaces.size} faces — nenhum domicílio ficou de fora.`,
+                    );
+                    carregarAjustesIniciais();
+                }
+
+                /* ============ Cores por critério ============ */
+                function indiceCor(p) {
+                    if (E.criterio === "quadra") return p._qi;
+                    if (E.criterio === "face") return p._qi * 2 + (p.face - 1);
+                    return E.ruaIdx.get(p.rua) || 0;
+                }
+                function estilo(f) {
+                    const p = f.properties;
+                    if (E.modoEdicao) {
+                        const estaSel = E.selecionadas.has(p.id);
+                        const temAjuste = !!(E.ajustes && E.ajustes[p.id]);
+                        if (estaSel) {
+                            return {
+                                color: "#00d2ff",
+                                weight: 2.4,
+                                opacity: 1,
+                                fillColor: "#00d2ff",
+                                fillOpacity: 0.75,
+                            };
+                        }
+                        if (temAjuste) {
+                            return {
+                                color: "#ff9800",
+                                weight: 1.6,
+                                opacity: 0.95,
+                                fillColor: corQuadra(indiceCor(p)),
+                                fillOpacity: E.opac,
+                            };
+                        }
+                    }
+                    const selecionada = E.selec === null || p._qi === E.selec;
+                    // Modo indicador: só as casas com o indicador ficam coloridas; as demais ficam apagadas
+                    if (E.indicador) {
+                        const tem = (p.indicadores_mock || []).includes(
+                            E.indicador.nome,
+                        );
+                        if (tem)
+                            return {
+                                color: E.indicador.cor,
+                                weight: 1.2,
+                                opacity: selecionada ? 1 : 0.3,
+                                fillColor: E.indicador.cor,
+                                fillOpacity: selecionada ? 0.95 : 0.25,
+                            };
+                        return {
+                            color: "#cccccc",
+                            weight: 0.5,
+                            opacity: selecionada ? 0.5 : 0.15,
+                            fillColor: "#e0e0e0",
+                            fillOpacity: selecionada ? 0.25 : 0.05,
+                        };
+                    }
+                    return {
+                        color: traco(),
+                        weight: 0.7,
+                        opacity: selecionada ? 0.85 : 0.2,
+                        fillColor: corQuadra(indiceCor(p)),
+                        fillOpacity: selecionada ? E.opac : E.opac * 0.16,
+                    };
+                }
+
+                /* ============ Indicadores de saúde (protótipo) ============ */
+                const TODOS_INDICADORES = [
+                    "hiperdia",
+                    "recem_nascida",
+                    "saude_mental",
+                    "hipertensao",
+                    "acamados",
+                    "tuberculose",
+                    "gestantes",
+                    "menor_2_anos",
+                    "bolsa_familia",
+                    "idosos",
+                    "risco_sanitario",
+                    "vacina_atrasada",
+                    "cancer_colo_utero",
+                    "cancer_mama",
+                    "saude_sexual_juvenil",
+                ];
+                const NOMES_INDICADORES = {
+                    hiperdia: "Hiperdia",
+                    recem_nascida: "Criança recém-nascida",
+                    saude_mental: "Saúde mental",
+                    hipertensao: "Hipertensão arterial",
+                    acamados: "Acamados",
+                    tuberculose: "Tuberculose",
+                    gestantes: "Gestantes",
+                    menor_2_anos: "Criança < 2 anos",
+                    bolsa_familia: "Bolsa Família",
+                    idosos: "Idosos 60+",
+                    risco_sanitario: "Risco epidem. e sanitário",
+                    vacina_atrasada: "Vacina atrasada",
+                    cancer_colo_utero: "Rastreio câncer colo do útero",
+                    cancer_mama: "Rastreio câncer de mama",
+                    saude_sexual_juvenil: "HPV / saúde sexual e reprodutiva",
+                };
+
+                // Dados FICTÍCIOS (protótipo). Determinístico por casa+indicador, então o
+                // resultado não muda a cada recarga da página. A chance de cada indicador
+                // aparecer varia: a maioria fica em 15%, mas os indicadores de puericultura
+                // (recém-nascido, criança < 2 anos) usam uma chance bem mais alta — quando a
+                // casa tem alguém com o perfil certo (bebê, criança pequena), o ACS
+                // praticamente sempre tem esse atendimento registrado.
+                const PROB_INDICADOR = {
+                    recem_nascida: 0.9,
+                    menor_2_anos: 0.9,
+                    bolsa_familia: 0.55,
+                    saude_sexual_juvenil: 0.35,
+                    cancer_colo_utero: 0.22,
+                    cancer_mama: 0.22,
+                };
+                function hash01(s) {
+                    let h = 2166136261;
+                    for (let i = 0; i < s.length; i++) {
+                        h ^= s.charCodeAt(i);
+                        h = Math.imul(h, 16777619);
+                    }
+                    h ^= h >>> 15;
+                    h = Math.imul(h, 2246822519);
+                    h ^= h >>> 13;
+                    return (h >>> 0) / 4294967296;
+                }
+                function gerarIndicadoresMock(f, moradores) {
+                    // só considera o indicador se, além do sorteio de probabilidade, existir ao
+                    // menos um morador com perfil compatível (ex.: "gestantes" exige mulher em
+                    // idade fértil na casa) — evita atribuições sem sentido, como uma
+                    // "gestante" de 70 anos.
+                    return TODOS_INDICADORES.filter((ind) => {
+                        const prob = PROB_INDICADOR[ind] ?? 0.15;
+                        if (hash01(f.properties.id + "|" + ind) >= prob)
+                            return false;
+                        return moradores.some((m) =>
+                            perfilCombina(ind, m, idadeEmAnos(m.nascimento)),
+                        );
+                    });
+                }
+
+                /* ============ Moradores fictícios (protótipo) ============ =======
+   Dados 100% inventados para fins de demonstração da interface.
+   Nenhum dado real de morador, CPF, RG ou prontuário é usado aqui.
+   Tudo é determinístico (semente por casa), então o resultado não
+   muda a cada recarga da página. =================================== */
+
+                // Gerador pseudoaleatório com semente (mulberry32), para que cada casa
+                // sempre produza os mesmos moradores/fichas nesta sessão de dados.
+                function semeador(txt) {
+                    let h = 2166136261;
+                    for (let i = 0; i < txt.length; i++) {
+                        h ^= txt.charCodeAt(i);
+                        h = Math.imul(h, 16777619);
+                    }
+                    return h >>> 0;
+                }
+                function rngDe(txt) {
+                    let s = semeador(txt);
+                    return function () {
+                        s |= 0;
+                        s = (s + 0x6d2b79f5) | 0;
+                        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+                        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+                    };
+                }
+                const sorteiaItem = (rng, arr) =>
+                    arr[Math.floor(rng() * arr.length)];
+                const sorteiaInt = (rng, min, max) =>
+                    min + Math.floor(rng() * (max - min + 1));
+
+                const NOMES_M = [
+                    "João",
+                    "José",
+                    "Antônio",
+                    "Francisco",
+                    "Carlos",
+                    "Paulo",
+                    "Pedro",
+                    "Lucas",
+                    "Marcos",
+                    "Rafael",
+                    "Gabriel",
+                    "Daniel",
+                    "Felipe",
+                    "Bruno",
+                    "Thiago",
+                    "André",
+                    "Ricardo",
+                    "Eduardo",
+                    "Gustavo",
+                    "Fernando",
+                    "Luiz",
+                    "Mateus",
+                    "Diego",
+                    "Vitor",
+                    "Alexandre",
+                    "Renato",
+                    "Sérgio",
+                    "Wagner",
+                    "Cláudio",
+                    "Hélio",
+                    "Jorge",
+                    "Nilson",
+                    "Raimundo",
+                    "Edson",
+                    "Adriano",
+                    "Fábio",
+                    "Leandro",
+                    "Rodrigo",
+                    "Samuel",
+                    "Igor",
+                ];
+                const NOMES_F = [
+                    "Maria",
+                    "Ana",
+                    "Francisca",
+                    "Antônia",
+                    "Adriana",
+                    "Juliana",
+                    "Márcia",
+                    "Fernanda",
+                    "Patrícia",
+                    "Aline",
+                    "Sandra",
+                    "Camila",
+                    "Amanda",
+                    "Bruna",
+                    "Jéssica",
+                    "Letícia",
+                    "Larissa",
+                    "Gabriela",
+                    "Rafaela",
+                    "Vanessa",
+                    "Cristina",
+                    "Débora",
+                    "Luciana",
+                    "Simone",
+                    "Tatiane",
+                    "Raquel",
+                    "Rosa",
+                    "Benedita",
+                    "Socorro",
+                    "Conceição",
+                    "Rosangela",
+                    "Eliane",
+                    "Valéria",
+                    "Priscila",
+                    "Daniela",
+                    "Carla",
+                    "Natália",
+                    "Beatriz",
+                    "Sueli",
+                    "Ivone",
+                ];
+                const SOBRENOMES = [
+                    "Silva",
+                    "Souza",
+                    "Oliveira",
+                    "Santos",
+                    "Pereira",
+                    "Costa",
+                    "Rodrigues",
+                    "Almeida",
+                    "Nascimento",
+                    "Lima",
+                    "Araújo",
+                    "Fernandes",
+                    "Carvalho",
+                    "Gomes",
+                    "Martins",
+                    "Rocha",
+                    "Ribeiro",
+                    "Alves",
+                    "Monteiro",
+                    "Mendes",
+                    "Barros",
+                    "Freitas",
+                    "Barbosa",
+                    "Pinto",
+                    "Moura",
+                    "Cavalcante",
+                    "Dias",
+                    "Castro",
+                    "Campos",
+                    "Teixeira",
+                    "Picanço",
+                    "Maciel",
+                    "Tavares",
+                    "Corrêa",
+                    "Furtado",
+                    "Pantoja",
+                    "Miranda",
+                    "Cardoso",
+                    "Brandão",
+                    "Azevedo",
+                ];
+
+                // Raça/cor — categorias oficiais do IBGE/CNS, mesmas usadas no cadastro do
+                // e-SUS. Distribuição aproximada da região Norte (onde "parda" é maioria),
+                // só para o sorteio ficar plausível — não vem de nenhum dado real.
+                const RACAS = [
+                    { r: "Parda", peso: 65 },
+                    { r: "Branca", peso: 17 },
+                    { r: "Preta", peso: 9 },
+                    { r: "Indígena", peso: 5 },
+                    { r: "Amarela", peso: 4 },
+                ];
+                function sorteiaRaca(rng) {
+                    const total = RACAS.reduce((s, x) => s + x.peso, 0);
+                    let alvo = rng() * total;
+                    for (const x of RACAS) {
+                        alvo -= x.peso;
+                        if (alvo <= 0) return x.r;
+                    }
+                    return RACAS[0].r;
+                }
+
+                function nomeCompleto(rng, sexo) {
+                    const primeiro =
+                        sexo === "F"
+                            ? sorteiaItem(rng, NOMES_F)
+                            : sorteiaItem(rng, NOMES_M);
+                    const n = rng() < 0.55 ? 2 : 1;
+                    const sobrenomes = new Set();
+                    while (sobrenomes.size < n)
+                        sobrenomes.add(sorteiaItem(rng, SOBRENOMES));
+                    return `${primeiro} ${[...sobrenomes].join(" ")}`;
+                }
+
+                // Relações possíveis com o(a) chefe da família, com a faixa etária típica de cada uma
+                const RELACOES = [
+                    { r: "Cônjuge/companheiro(a)", min: 18, max: 85, peso: 3 },
+                    { r: "Filho(a)", min: 0, max: 45, peso: 6 },
+                    { r: "Neto(a)", min: 0, max: 17, peso: 2 },
+                    { r: "Mãe", min: 45, max: 98, peso: 1 },
+                    { r: "Pai", min: 45, max: 98, peso: 1 },
+                    { r: "Irmão(ã)", min: 0, max: 85, peso: 2 },
+                    { r: "Outro parente", min: 0, max: 90, peso: 1 },
+                ];
+                function sorteiaRelacao(rng) {
+                    const total = RELACOES.reduce((s, r) => s + r.peso, 0);
+                    let alvo = rng() * total;
+                    for (const rel of RELACOES) {
+                        alvo -= rel.peso;
+                        if (alvo <= 0) return rel;
+                    }
+                    return RELACOES[0];
+                }
+
+                function nascimentoPorIdade(rng, idadeAnos) {
+                    const hoje = new Date();
+                    const diasNaIdade = Math.floor(idadeAnos * 365.25);
+                    const d = new Date(hoje);
+                    d.setDate(
+                        d.getDate() - diasNaIdade - sorteiaInt(rng, 0, 364),
+                    );
+                    return d;
+                }
+                function idadeEmAnos(nascimento) {
+                    return (
+                        (Date.now() - nascimento.getTime()) /
+                        (365.25 * 24 * 3600 * 1000)
+                    );
+                }
+                function formatarData(d) {
+                    return d.toLocaleDateString("pt-BR");
+                }
+
+                // Gera o grupo familiar fictício de uma casa (1 a 5 pessoas)
+                function gerarMoradores(f) {
+                    const p = f.properties;
+                    const rng = rngDe(p.id + "|moradores");
+                    const n = sorteiaInt(rng, 1, 5);
+                    const moradores = [];
+
+                    // chefe da família
+                    const sexoChefe = rng() < 0.5 ? "M" : "F";
+                    const idadeChefe = sorteiaInt(rng, 24, 72);
+                    moradores.push({
+                        id: p.id + "-m1",
+                        nome: nomeCompleto(rng, sexoChefe),
+                        sexo: sexoChefe,
+                        raca: sorteiaRaca(rng),
+                        relacao: "Responsável pelo domicílio",
+                        nascimento: nascimentoPorIdade(rng, idadeChefe),
+                    });
+
+                    for (let i = 1; i < n; i++) {
+                        const rel = sorteiaRelacao(rng);
+                        let sexo = rng() < 0.5 ? "M" : "F";
+                        if (rel.r === "Mãe") sexo = "F";
+                        if (rel.r === "Pai") sexo = "M";
+                        // Residencial com muitas famílias jovens: quando a relação permite
+                        // (filho, neto, irmão, outro parente), quase metade das vezes essa
+                        // pessoa é sorteada como criança pequena (0 a 9 anos), em vez de usar
+                        // a faixa inteira da relação. Isso deixa a base com mais crianças,
+                        // como é comum num bairro residencial.
+                        const podeSerCrianca = rel.min === 0;
+                        const idade =
+                            podeSerCrianca && rng() < 0.45
+                                ? sorteiaInt(rng, 0, 9)
+                                : sorteiaInt(rng, rel.min, rel.max);
+                        moradores.push({
+                            id: `${p.id}-m${i + 1}`,
+                            nome: nomeCompleto(rng, sexo),
+                            sexo,
+                            raca: sorteiaRaca(rng),
+                            relacao: rel.r,
+                            nascimento: nascimentoPorIdade(rng, idade),
+                        });
+                    }
+                    return moradores;
+                }
+
+                /* ---------- Fichas fictícias por indicador (baseadas nos critérios do
+   Guia de Bolso de Indicadores da APS — CONASEMS/Ministério da Saúde,
+   quando aplicável; demais indicadores são protótipo livre) ---------- */
+                const FICHAS_INDICADOR = {
+                    menor_2_anos: {
+                        titulo: "Cuidado no desenvolvimento infantil",
+                        itens: [
+                            { t: "1ª consulta até o 30º dia de vida", p: 15 },
+                            {
+                                t: "Pelo menos 9 consultas até os 2 anos de vida",
+                                p: 15,
+                            },
+                            {
+                                t: "Pelo menos 9 registros de peso e altura",
+                                p: 15,
+                            },
+                            {
+                                t: "2 visitas do ACS (até 30 dias e até 6 meses)",
+                                p: 15,
+                            },
+                            {
+                                t: "Suplementação de vitamina A em dia para a idade",
+                                p: 10,
+                            },
+                            {
+                                t: "Atendimento odontológico realizado no período",
+                                p: 10,
+                            },
+                            // Esquema vacinal: cruzamento doença a doença, em vez de um único item genérico
+                            { t: "Vacina contra difteria registrada", p: 2 },
+                            { t: "Vacina contra tétano registrada", p: 2 },
+                            {
+                                t: "Vacina contra tosse convulsa (pertussis) registrada",
+                                p: 2,
+                            },
+                            { t: "Vacina contra hepatite B registrada", p: 2 },
+                            {
+                                t: "Vacina contra Haemophilus influenzae tipo b registrada",
+                                p: 2,
+                            },
+                            {
+                                t: "Vacina contra poliomielite registrada",
+                                p: 2,
+                            },
+                            { t: "Vacina contra sarampo registrada", p: 2 },
+                            {
+                                t: "Vacina contra papeira (caxumba) registrada",
+                                p: 2,
+                            },
+                            { t: "Vacina contra rubéola registrada", p: 2 },
+                            {
+                                t: "Vacina contra doença pneumocócica registrada",
+                                p: 2,
+                            },
+                        ],
+                    },
+
+                    recem_nascida: {
+                        titulo: "Acompanhamento do recém-nascido",
+                        itens: [
+                            { t: "1ª consulta até o 30º dia de vida", p: 30 },
+                            { t: "Visita do ACS até 30 dias de vida", p: 25 },
+                            { t: "Teste do pezinho realizado", p: 25 },
+                            {
+                                t: "Vacinas de maternidade (BCG e hepatite B)",
+                                p: 20,
+                            },
+                        ],
+                    },
+
+                    gestantes: {
+                        titulo: "Cuidado na gestação e puerpério",
+                        itens: [
+                            {
+                                t: "1ª consulta até a 12ª semana de gestação",
+                                p: 10,
+                            },
+                            { t: "Pelo menos 7 consultas de pré-natal", p: 9 },
+                            {
+                                t: "7 registros de pressão arterial na gestação",
+                                p: 9,
+                            },
+                            {
+                                t: "7 registros de peso e altura na gestação",
+                                p: 9,
+                            },
+                            {
+                                t: "3 visitas do ACS após a 1ª consulta de pré-natal",
+                                p: 9,
+                            },
+                            { t: "Vacina dTpa a partir da 20ª semana", p: 9 },
+                            {
+                                t: "Exames para sífilis, HIV e hepatites no 1º trimestre",
+                                p: 9,
+                            },
+                            {
+                                t: "Exames para sífilis e HIV no 3º trimestre",
+                                p: 9,
+                            },
+                            { t: "Consulta no puerpério", p: 9 },
+                            { t: "Visita do ACS no puerpério", p: 9 },
+                            { t: "Atividade de saúde bucal na gestação", p: 9 },
+                        ],
+                    },
+
+                    hipertensao: {
+                        titulo: "Cuidado da pessoa com hipertensão",
+                        itens: [
+                            {
+                                t: "Consulta presencial ou remota nos últimos 6 meses",
+                                p: 25,
+                            },
+                            {
+                                t: "Aferição de pressão arterial nos últimos 6 meses",
+                                p: 25,
+                            },
+                            {
+                                t: "Registro de peso e altura no último ano",
+                                p: 25,
+                            },
+                            {
+                                t: "2 visitas domiciliares do ACS no último ano, com intervalo mínimo de 30 dias entre elas",
+                                p: 25,
+                            },
+                        ],
+                    },
+
+                    hiperdia: {
+                        titulo: "Acompanhamento Hiperdia (hipertensão/diabetes)",
+                        itens: [
+                            {
+                                t: "Consulta médica ou de enfermagem nos últimos 6 meses",
+                                p: 20,
+                            },
+                            {
+                                t: "Aferição de pressão arterial nos últimos 6 meses",
+                                p: 15,
+                            },
+                            {
+                                t: "Registro de peso e altura no último ano",
+                                p: 15,
+                            },
+                            {
+                                t: "2 visitas domiciliares do ACS no último ano, com intervalo mínimo de 30 dias entre elas",
+                                p: 20,
+                            },
+                            {
+                                t: "Solicitação de hemoglobina glicada nos últimos 12 meses",
+                                p: 15,
+                            },
+                            {
+                                t: "Avaliação dos pés nos últimos 12 meses",
+                                p: 15,
+                            },
+                        ],
+                    },
+
+                    idosos: {
+                        titulo: "Cuidado da pessoa idosa",
+                        itens: [
+                            {
+                                t: "Consulta médica ou de enfermagem nos últimos 12 meses",
+                                p: 25,
+                            },
+                            {
+                                t: "Registro de peso e altura nos últimos 12 meses",
+                                p: 25,
+                            },
+                            {
+                                t: "2 visitas do ACS nos últimos 12 meses",
+                                p: 25,
+                            },
+                            {
+                                t: "Dose da vacina contra influenza no último ano",
+                                p: 25,
+                            },
+                        ],
+                    },
+
+                    bolsa_familia: {
+                        titulo: "Condicionalidades de saúde — Bolsa Família",
+                        itens: [
+                            {
+                                t: "Peso e altura acompanhados no semestre",
+                                p: 35,
+                            },
+                            { t: "Calendário vacinal em dia", p: 35 },
+                            {
+                                t: "Participação em ação educativa de saúde",
+                                p: 30,
+                            },
+                        ],
+                    },
+
+                    saude_mental: {
+                        titulo: "Acompanhamento em saúde mental (protótipo)",
+                        itens: [
+                            {
+                                t: "Consulta ou atendimento nos últimos 6 meses",
+                                p: 35,
+                            },
+                            {
+                                t: "Visita domiciliar da equipe no período",
+                                p: 35,
+                            },
+                            {
+                                t: "Participação em grupo ou atividade terapêutica",
+                                p: 30,
+                            },
+                        ],
+                    },
+
+                    acamados: {
+                        titulo: "Cuidado domiciliar à pessoa acamada (protótipo)",
+                        itens: [
+                            {
+                                t: "Visita domiciliar da equipe no último mês",
+                                p: 40,
+                            },
+                            {
+                                t: "Avaliação de risco de lesão por pressão",
+                                p: 30,
+                            },
+                            {
+                                t: "Plano de cuidados domiciliares atualizado",
+                                p: 30,
+                            },
+                        ],
+                    },
+
+                    tuberculose: {
+                        titulo: "Acompanhamento de tuberculose (protótipo)",
+                        itens: [
+                            { t: "Tratamento supervisionado em dia", p: 40 },
+                            {
+                                t: "Exame de escarro de controle realizado",
+                                p: 30,
+                            },
+                            {
+                                t: "Busca ativa de contatos domiciliares",
+                                p: 30,
+                            },
+                        ],
+                    },
+
+                    risco_sanitario: {
+                        titulo: "Risco epidemiológico e sanitário (protótipo)",
+                        itens: [
+                            {
+                                t: "Visita de vigilância sanitária/ambiental realizada",
+                                p: 50,
+                            },
+                            {
+                                t: "Situação de risco identificada e notificada",
+                                p: 50,
+                            },
+                        ],
+                    },
+
+                    vacina_atrasada: {
+                        titulo: "Situação vacinal em atraso (protótipo)",
+                        itens: [
+                            {
+                                t: "Dose em atraso identificada pela equipe",
+                                p: 50,
+                            },
+                            {
+                                t: "Busca ativa para atualização vacinal realizada",
+                                p: 50,
+                            },
+                        ],
+                    },
+
+                    cancer_colo_utero: {
+                        titulo: "Rastreio do câncer de colo do útero",
+                        itens: [
+                            {
+                                t: "Exame de rastreamento dentro do intervalo recomendado para o método",
+                                p: 100,
+                            },
+                        ],
+                        extra: (rng) =>
+                            rng() < 0.3
+                                ? "Método: teste de HPV-DNA — intervalo de rastreamento de 60 meses."
+                                : "Método: citologia (Papanicolau) — intervalo de rastreamento de 36 meses.",
+                    },
+
+                    cancer_mama: {
+                        titulo: "Rastreio do câncer de mama",
+                        itens: [
+                            {
+                                t: "Mamografia (ou exame equivalente) solicitada ou avaliada nos últimos 24 meses",
+                                p: 100,
+                            },
+                        ],
+                    },
+                };
+
+                function classificarFicha(pontos) {
+                    if (pontos > 75)
+                        return { texto: "Ótimo", classe: "selo-otimo" };
+                    if (pontos > 50)
+                        return { texto: "Bom", classe: "selo-bom" };
+                    if (pontos > 25)
+                        return {
+                            texto: "Suficiente",
+                            classe: "selo-suficiente",
+                        };
+                    return { texto: "Regular", classe: "selo-regular" };
+                }
+
+                // Perfil etário/sexo esperado para cada indicador — usado só para tentar
+                // escolher, entre os moradores da casa, alguém plausível para a ficha.
+                function perfilCombina(indicador, m, idade) {
+                    switch (indicador) {
+                        case "recem_nascida":
+                            return idade <= 2 / 12;
+                        case "menor_2_anos":
+                            return idade < 2;
+                        case "gestantes":
+                            return m.sexo === "F" && idade >= 16 && idade <= 45;
+                        case "idosos":
+                            return idade >= 60;
+                        case "bolsa_familia":
+                            return idade < 18;
+                        case "cancer_colo_utero":
+                            return m.sexo === "F" && idade >= 25 && idade <= 64;
+                        case "cancer_mama":
+                            return m.sexo === "F" && idade >= 50 && idade <= 69;
+                        case "saude_sexual_juvenil":
+                            return idade >= 9 && idade <= 69;
+                        default:
+                            return idade >= 18; // hiperdia, hipertensao, saude_mental, acamados, tuberculose, risco_sanitario, vacina_atrasada
+                    }
+                }
+
+                // Ficha de "HPV / saúde sexual e reprodutiva" muda de conteúdo conforme a
+                // idade/sexo da pessoa: a vacina de HPV só se aplica a meninas de 9 a 14
+                // anos, e o atendimento em saúde sexual e reprodutiva vale de 14 a 69 anos.
+                // Quando os dois se aplicam (meninas de 14 anos), cada um valendo metade.
+                function gerarFichaSaudeSexual(rng, idade, sexo) {
+                    const podeHpv = sexo === "F" && idade >= 9 && idade <= 14;
+                    const podeReprodutiva = idade >= 14 && idade <= 69;
+                    const base = [];
+                    if (podeHpv)
+                        base.push({
+                            t: "Dose da vacina contra HPV (meninas de 9 a 14 anos)",
+                            p: podeReprodutiva ? 50 : 100,
+                        });
+                    if (podeReprodutiva)
+                        base.push({
+                            t: "Atendimento em saúde sexual e reprodutiva no último ano (14 a 69 anos)",
+                            p: podeHpv ? 50 : 100,
+                        });
+                    if (!base.length)
+                        base.push({
+                            t: "Avaliação de saúde sexual e reprodutiva",
+                            p: 100,
+                        });
+                    let pontos = 0;
+                    const itens = base.map((it) => {
+                        const atendido = rng() < 0.35 + rng() * 0.5;
+                        if (atendido) pontos += it.p;
+                        return { t: it.t, atendido };
+                    });
+                    return {
+                        indicador: "saude_sexual_juvenil",
+                        titulo: "HPV / saúde sexual e reprodutiva",
+                        pontos,
+                        classificacao: classificarFicha(pontos),
+                        itens,
+                        extra: null,
+                    };
+                }
+
+                function gerarFichaParaMorador(rng, indicador, idade, sexo) {
+                    if (indicador === "saude_sexual_juvenil")
+                        return gerarFichaSaudeSexual(rng, idade, sexo);
+                    const modelo = FICHAS_INDICADOR[indicador];
+                    if (!modelo) return null;
+                    let pontos = 0;
+                    const itens = modelo.itens.map((it) => {
+                        const atendido = rng() < 0.35 + rng() * 0.5; // varia a "qualidade" do acompanhamento por morador
+                        if (atendido) pontos += it.p;
+                        return { t: it.t, atendido };
+                    });
+                    const cls = classificarFicha(pontos);
+                    return {
+                        indicador,
+                        titulo: modelo.titulo,
+                        pontos,
+                        classificacao: cls,
+                        itens,
+                        extra: modelo.extra ? modelo.extra(rng) : null,
+                    };
+                }
+
+                // Atribui, para cada indicador ativo da casa, um morador "atendido" plausível
+                // e preenche a ficha fictícia dele. Quem não recebe nenhuma ficha fica
+                // marcado como "sem informação" — o ACS sabe o nome, mas não há atendimento
+                // registrado para essa pessoa neste protótipo.
+                function atribuirFichas(f, moradores) {
+                    const p = f.properties;
+                    const rng = rngDe(p.id + "|fichas");
+                    const indicadores = p.indicadores_mock || [];
+                    for (const ind of indicadores) {
+                        const idades = moradores.map((m) =>
+                            idadeEmAnos(m.nascimento),
+                        );
+                        const candidatos = moradores.filter((m, i) =>
+                            perfilCombina(ind, m, idades[i]),
+                        );
+                        const escolhido = candidatos.length
+                            ? sorteiaItem(rng, candidatos)
+                            : sorteiaItem(rng, moradores);
+                        const idadeEscolhido = idadeEmAnos(
+                            escolhido.nascimento,
+                        );
+                        const ficha = gerarFichaParaMorador(
+                            rng,
+                            ind,
+                            idadeEscolhido,
+                            escolhido.sexo,
+                        );
+                        if (!escolhido.fichas) escolhido.fichas = [];
+                        escolhido.fichas.push(ficha);
+                    }
+                    garantirCoberturaInfantil(f, moradores, rng);
+                }
+
+                // Reforço pedido: quase todas as crianças com menos de 10 anos devem ter
+                // dados de atendimento, como se a grande maioria fosse de fato acompanhada
+                // pela equipe. Quem com menos de 10 anos ainda não ganhou nenhuma ficha pelo
+                // sorteio normal de indicadores recebe uma agora, com 90% de chance.
+                function garantirCoberturaInfantil(f, moradores, rng) {
+                    const p = f.properties;
+                    for (const m of moradores) {
+                        const idade = idadeEmAnos(m.nascimento);
+                        if (idade >= 10) continue;
+                        if (m.fichas && m.fichas.length) continue;
+                        if (rng() >= 0.9) continue;
+                        const ind =
+                            idade <= 2 / 12
+                                ? "recem_nascida"
+                                : idade < 2
+                                  ? "menor_2_anos"
+                                  : "bolsa_familia";
+                        if (!p.indicadores_mock.includes(ind))
+                            p.indicadores_mock.push(ind);
+                        const ficha = gerarFichaParaMorador(
+                            rng,
+                            ind,
+                            idade,
+                            m.sexo,
+                        );
+                        m.fichas = [ficha];
+                    }
+                }
+
+                /* ============ Modal "Moradores da casa" ============ */
+                function iconeAtendido(ok) {
+                    return ok
+                        ? '<span class="ok">✓</span>'
+                        : '<span class="falta">✕</span>';
+                }
+                function htmlFicha(ficha) {
+                    return `<div class="ficha">
+    <div class="ficha-topo">
+      <span class="ficha-titulo">${ficha.titulo}</span>
+      <span class="selo-class ${ficha.classificacao.classe}">${ficha.classificacao.texto} · ${ficha.pontos}/100</span>
+    </div>
+    <div class="ficha-itens">
+      ${ficha.itens.map((it) => `<div class="ficha-item${it.atendido ? "" : " nao-atendido"}">${iconeAtendido(it.atendido)} ${it.t}</div>`).join("")}
+    </div>
+    ${ficha.extra ? `<div class="ficha-extra">${ficha.extra}</div>` : ""}
+  </div>`;
+                }
+                function htmlMorador(m) {
+                    const idade = Math.floor(idadeEmAnos(m.nascimento));
+                    const temFicha = m.fichas && m.fichas.length;
+                    return `<div class="morador">
+    <div class="morador-topo">
+      <span class="morador-nome">${m.nome}</span>
+      <span class="morador-idade">${idade} ${idade === 1 ? "ano" : "anos"}</span>
+    </div>
+    <div class="morador-rel">${m.relacao} · ${m.raca} · nascimento ${formatarData(m.nascimento)}</div>
+    ${
+        temFicha
+            ? m.fichas.map(htmlFicha).join("")
+            : `<span class="selo-seminfo">Sem informação de atendimento para esta pessoa</span>`
+    }
+  </div>`;
+                }
+
+                function abrirMoradores(f) {
+                    const p = f.properties;
+                    if (!p._moradoresCache) return;
+                    $("modalTitulo").textContent =
+                        `${p.rua}${p.numero ? ", " + p.numero : ""}`;
+                    $("modalSub").textContent =
+                        `${p._moradoresCache.length} morador(es) cadastrado(s) pelo ACS · ${p._qn} · dados fictícios de protótipo`;
+                    $("modalCorpo").innerHTML = p._moradoresCache
+                        .map(htmlMorador)
+                        .join("");
+                    $("modalMoradores").style.display = "flex";
+                }
+                function fecharModalMoradores() {
+                    $("modalMoradores").style.display = "none";
+                }
+                $("modalFechar").addEventListener(
+                    "click",
+                    fecharModalMoradores,
+                );
+                $("modalMoradores").addEventListener("click", (e) => {
+                    if (e.target.id === "modalMoradores")
+                        fecharModalMoradores();
+                });
+                document.addEventListener("keydown", (e) => {
+                    if (e.key === "Escape") fecharModalMoradores();
+                });
+
+                function marcarBotaoIndicador(nome) {
+                    document
+                        .querySelectorAll(".btn-indicador[data-ind]")
+                        .forEach((b) =>
+                            b.classList.toggle("ativo", b.dataset.ind === nome),
+                        );
+                }
+
+                // Chamada pelos botões do menu (onclick no HTML) — por isso é exposta em window
+                window.aplicarIndicador = function (nome, cor) {
+                    if (!cCasas) return; // mapa ainda não carregou
+                    // clicar de novo no mesmo indicador desliga o filtro
+                    if (E.indicador && E.indicador.nome === nome) {
+                        window.limparIndicadores();
+                        return;
+                    }
+                    E.indicador = { nome, cor };
+                    marcarBotaoIndicador(nome);
+                    pintar();
+                    // casas destacadas por cima das apagadas
+                    cCasas.eachLayer((l) => {
+                        if (
+                            (
+                                l.feature.properties.indicadores_mock || []
+                            ).includes(nome)
+                        )
+                            l.bringToFront();
+                    });
+                    const n = E.casas.filter((f) =>
+                        f.properties.indicadores_mock.includes(nome),
+                    ).length;
+                    st(
+                        `<b>${NOMES_INDICADORES[nome]}</b> — <b>${n}</b> casas com este indicador (dados fictícios de protótipo).`,
+                    );
+                };
+
+                window.limparIndicadores = function () {
+                    E.indicador = null;
+                    marcarBotaoIndicador(null);
+                    pintar();
+                    st(
+                        `<b>${E.casas.length.toLocaleString("pt-BR")}</b> casas em ${E.quadras.length} quarteirões.`,
+                    );
+                };
+
+                /* ============ Desenho ============ */
+                function desenhar() {
+                    [
+                        cCasas,
+                        cPontos,
+                        cOutros,
+                        cContorno,
+                        cRotulos,
+                        cRealce,
+                    ].forEach((c) => c && map.removeLayer(c));
+
+                    cCasas = L.geoJSON(
+                        { type: "FeatureCollection", features: E.casas },
+                        {
+                            style: estilo,
+                            onEachFeature: (f, l) => {
+                                mapaCamadasCasas.set(f.properties.id, l);
+                                l.bindPopup(popupCasa(f.properties), {
+                                    closeButton: true,
+                                    maxWidth: 300,
+                                });
+                                l.on("mouseover", () => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
+                                    if (!E.modoEdicao) {
+                                        l.setStyle({
+                                            weight: 2,
+                                            color: temaEscuro ? "#fff" : "#111",
+                                        });
+                                    }
+                                });
+                                l.on("mouseout", () => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
+                                    if (!E.modoEdicao) {
+                                        l.setStyle(estilo(f));
+                                    }
+                                });
+                                l.on("mousedown", (e) => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
+                                    if (E.modoEdicao && E.ferramentaEdicao === "selecionar" && e.originalEvent && e.originalEvent.button === 0) {
+                                        L.DomEvent.stopPropagation(e);
+                                        aoMousedownCasaModoEdicao(f, e);
+                                    }
+                                });
+                                l.on("click", (e) => {
+                                    if (segurandoEspaco || panMeioAtivo) return;
+                                    if (E.modoEdicao) {
+                                        L.DomEvent.stopPropagation(e);
+                                        map.closePopup();
+                                        aoClicarCasaModoEdicao(f, e);
+                                    } else {
+                                        selecionarCasa(f);
+                                        l.openPopup(e.latlng || l.getBounds().getCenter());
+                                    }
+                                });
+                                l.on("popupopen", () => {
+                                    const btn =
+                                        document.getElementById(
+                                            "btnVerMoradores",
+                                        );
+                                    if (btn)
+                                        btn.addEventListener("click", () => {
+                                            map.closePopup();
+                                            abrirMoradores(f);
+                                        });
+                                });
+                            },
+                        },
+                    ).addTo(map);
+
+                    cPontos = L.geoJSON(
+                        {
+                            type: "FeatureCollection",
+                            features: E.casas.map((f) => ({
+                                type: "Feature",
+                                properties: f.properties,
+                                geometry: {
+                                    type: "Point",
+                                    coordinates: [
+                                        f.properties.lng_original,
+                                        f.properties.lat_original,
+                                    ],
+                                },
+                            })),
+                        },
+                        {
+                            pointToLayer: (f, ll) =>
+                                L.circleMarker(ll, {
+                                    radius: 1.9,
+                                    color: temaEscuro ? "#fff" : "#000",
+                                    weight: 0,
+                                    fillOpacity: 0.75,
+                                    fillColor: temaEscuro ? "#fff" : "#000",
+                                }),
+                        },
+                    );
+
+                    cOutros = L.geoJSON(
+                        { type: "FeatureCollection", features: E.outros },
+                        {
+                            pointToLayer: (f, ll) =>
+                                L.circleMarker(ll, {
+                                    radius: 3.6,
+                                    color: traco(),
+                                    weight: 0.9,
+                                    fillColor: COR_OUTROS(),
+                                    fillOpacity: 0.9,
+                                }),
+                            onEachFeature: (f, l) =>
+                                l.bindPopup(popupOutro(f.properties)),
+                        },
+                    );
+
+                    cContorno = L.layerGroup(
+                        E.quadras.map((q) =>
+                            L.polygon(
+                                q.contorno.map((c) => [c[1], c[0]]),
+                                {
+                                    color: corQuadra(q.idx),
+                                    weight: 1.6,
+                                    opacity: 0.85,
+                                    fill: false,
+                                    dashArray: "5 4",
+                                    interactive: false,
+                                },
+                            ),
+                        ),
+                    );
+
+                    cRotulos = L.layerGroup(
+                        E.quadras.map((q) =>
+                            L.marker([q.lat, q.lng], {
+                                interactive: false,
+                                icon: L.divIcon({
+                                    className: "",
+                                    iconSize: [62, 18],
+                                    html: `<span style="display:inline-block;transform:translate(-50%,-50%);padding:1px 6px;border-radius:5px;
+        font:600 11px/1.4 'JetBrains Mono',monospace;white-space:nowrap;
+        background:${temaEscuro ? "oklch(20% .015 165/.9)" : "oklch(100% 0 0/.88)"};
+        color:var(--ink);border:1px solid var(--border)">${q.nome} · ${q.casas.length}</span>`,
+                                }),
+                            }),
+                        ),
+                    );
+
+                    sincronizarCamadas();
+                    desenharDestaqueCasa();
+                    if (typeof desenharNumeracaoCasas === "function") desenharNumeracaoCasas();
+                }
+
+                // Contorno que marca qual casa está sendo consultada no momento. Não muda a
+                // cor da casa — é só uma borda (halo branco/preto + linha amarela) por cima,
+                // que fica até outra casa ser clicada. Sobrevive a troca de tema, posição
+                // (coordenada real/lotes iguais) e critério de cor, porque é redesenhado no
+                // fim de desenhar() a cada vez.
+                function desenharDestaqueCasa() {
+                    if (cDestaqueCasa) {
+                        map.removeLayer(cDestaqueCasa);
+                        cDestaqueCasa = null;
+                    }
+                    if (!E.casaSelecionadaId) return;
+                    const f = E.casas.find(
+                        (c) => c.properties.id === E.casaSelecionadaId,
+                    );
+                    if (!f) return;
+                    const latlngs = f.geometry.coordinates[0].map((c) => [
+                        c[1],
+                        c[0],
+                    ]);
+                    const halo = L.polygon(latlngs, {
+                        color: temaEscuro ? "#000" : "#fff",
+                        weight: 6,
+                        opacity: 0.8,
+                        fill: false,
+                        interactive: false,
+                    });
+                    const linha = L.polygon(latlngs, {
+                        color: "#FFD600",
+                        weight: 2.6,
+                        opacity: 1,
+                        fill: false,
+                        interactive: false,
+                    });
+                    cDestaqueCasa = L.layerGroup([halo, linha]).addTo(map);
+                }
+                function selecionarCasa(f) {
+                    E.casaSelecionadaId = f.properties.id;
+                    desenharDestaqueCasa();
+                }
+
+                function sincronizarCamadas() {
+                    const p = [
+                        [cCasas, "ckCasas"],
+                        [cPontos, "ckPontos"],
+                        [cOutros, "ckOutros"],
+                        [cContorno, "ckContorno"],
+                        [cRotulos, "ckRotulos"],
+                    ];
+                    for (const [c, id] of p) {
+                        if (!c) continue;
+                        const on = $(id).checked;
+                        if (on && !map.hasLayer(c)) c.addTo(map);
+                        if (!on && map.hasLayer(c)) map.removeLayer(c);
+                    }
+                    if (
+                        cCasas &&
+                        map.hasLayer(cCasas) &&
+                        cPontos &&
+                        map.hasLayer(cPontos)
+                    )
+                        cPontos.bringToFront();
+                }
+                function pintar() {
+                    if (cCasas) cCasas.setStyle(estilo);
+                }
+
+                // Troca a geometria entre a coordenada real e os lotes iguais, sem recarregar os dados.
+                function aplicarPosicao() {
+                    const uni = E.posicao === "uniforme";
+                    for (const f of E.casas) {
+                        const anel = uni
+                            ? f.properties._anelUni
+                            : f.properties._anelRealOrig;
+                        f.geometry.coordinates = [anel];
+                        f.properties._c = centroide(anel);
+                    }
+                    $("notaPos").innerHTML = uni
+                        ? "Cada face dividida em lotes de largura igual, no tamanho e alinhamento padronizados."
+                        : "Cada casa no ponto exato levantado pelo IBGE (apenas para leitura e referência).";
+                    const selec = E.selec;
+                    E.quadras.forEach((q) => {
+                        q.contorno = casco(
+                            q.casas.flatMap((f) =>
+                                f.geometry.coordinates[0].slice(0, -1),
+                            ),
+                        );
+                    });
+                    desenhar();
+                    if (selec !== null) {
+                        E.selec = null;
+                        selecionar(selec);
+                    }
+                    st(
+                        uni
+                            ? `Visão <b>lotes iguais</b> — as ${E.casas.length.toLocaleString("pt-BR")} casas exibidas com tamanho e espaçamento padronizados.`
+                            : `Visão <b>coordenada real</b> — ${E.casas.length.toLocaleString("pt-BR")} casas no ponto original do CNEFE/IBGE (apenas leitura).`,
+                    );
+                }
+
+                /* ============ Popups ============ */
+                function popupCasa(p) {
+                    const q = E.quadras[p._qi];
+                    return `<div class="pop">
+    <h3>${p.rua}${p.numero ? ", " + p.numero : ""}</h3>
+    <div class="sub">Domicílio ${p.especie === "2" ? "coletivo" : "particular"} · CEP ${p.cep ? formatarCep(p.cep) : "—"}</div>
+    <dl>
+      <dt>Quarteirão</dt><dd>${p._qn} <span style="color:var(--ink-3)">(${q.casas.length} casas)</span></dd>
+      <dt>Face</dt><dd>${p.face} de ${q.faces.size}</dd>
+      <dt>Ordem na face</dt><dd>${p.ordem_na_face} / ${p.casas_na_face}</dd>
+      <dt>Lote aprox.</dt><dd>${E.posicao === "uniforme" ? p.largura_uniforme_m : p.largura_m} × ${p.profundidade_m} m</dd>
+      <dt>Setor IBGE</dt><dd>…${String(p.setor).slice(-5)}</dd>
+      <dt>Quadra IBGE</dt><dd>${p.quadra}</dd>
+      <dt>Coordenada</dt><dd>${p.lat_original.toFixed(6)}, ${p.lng_original.toFixed(6)}</dd>
+    </dl>
+    ${(p.indicadores_mock || []).length ? `<div class="sub" style="margin-top:var(--space-3);margin-bottom:0">Indicadores (fictício): ${p.indicadores_mock.map((i) => NOMES_INDICADORES[i]).join(", ")}</div>` : ""}
+    <span class="tag">${
+        E.posicao === "uniforme"
+            ? "Desenho em lotes iguais ao longo da face"
+            : p.coord_ajustada
+              ? "Posição ajustada na face (coordenada repetida no cadastro)"
+              : "Posição conforme coordenada do CNEFE"
+    }</span>
+    <button class="btn btn-ver-moradores" id="btnVerMoradores" type="button">
+      👪 Ver moradores (${(p._moradoresCache || []).length})
+    </button>
+  </div>`;
+                }
+                function popupOutro(p) {
+                    return `<div class="pop">
+    <h3>${p.rua || "Endereço não residencial"}</h3>
+    <div class="sub">Fora da contagem de domicílios</div>
+    <dl>
+      <dt>Endereço</dt><dd style="font-family:inherit">${p.endereco || "—"}</dd>
+      ${p.estabelecimento ? `<dt>Estabelecimento</dt><dd style="font-family:inherit">${p.estabelecimento}</dd>` : ""}
+      <dt>Espécie</dt><dd>${p.especie}</dd>
+    </dl></div>`;
+                }
+                const formatarCep = (c) =>
+                    String(c).length === 8
+                        ? String(c).slice(0, 5) + "-" + String(c).slice(5)
+                        : c;
+
+                /* ============ Legenda ============ */
+                function desenharLegenda() {
+                    const el = $("legenda");
+                    if (E.criterio === "quadra") {
+                        el.innerHTML = `
+      <div class="rampa">${E.quadras
+          .slice(0, 12)
+          .map((q, i) => `<i style="background:${corQuadra(i)}"></i>`)
+          .join("")}</div>
+      <div class="lg">Uma cor por quarteirão (${E.quadras.length} no total, 12 matizes reaproveitados)</div>
+      <div class="lg"><span class="sw" style="background:${COR_OUTROS()}"></span>Outros usos</div>`;
+                    } else if (E.criterio === "face") {
+                        el.innerHTML = `
+      <div class="lg"><span class="sw" style="background:${corQuadra(0)}"></span>Face 1 · <span class="sw" style="background:${corQuadra(1)}"></span>Face 2 do mesmo quarteirão</div>
+      <div class="lg">Cada fileira de casas de um lado da rua recebe cor própria.</div>`;
+                    } else {
+                        el.innerHTML =
+                            `<div class="lg">Uma cor por logradouro — ${E.ruas.length} ruas.</div>` +
+                            E.ruas
+                                .slice(0, 8)
+                                .map(
+                                    (r) =>
+                                        `<div class="lg"><span class="sw" style="background:${corQuadra(E.ruaIdx.get(r))}"></span>${r.replace(/^(RUA|AVENIDA|TRAVESSA) /, "")}</div>`,
+                                )
+                                .join("") +
+                            (E.ruas.length > 8
+                                ? `<div class="lg" style="color:var(--ink-3)">+ ${E.ruas.length - 8} outras</div>`
+                                : "");
+                    }
+                }
+
+                /* ============ Lista de quadras ============ */
+                function preencherRuas() {
+                    const s = $("filtroRua");
+                    for (const r of E.ruas) {
+                        const o = document.createElement("option");
+                        o.value = r;
+                        o.textContent = r;
+                        s.appendChild(o);
+                    }
+                }
+                function desenharLista() {
+                    const rua = $("filtroRua").value;
+                    const vis = rua
+                        ? E.quadras.filter((q) => q.ruas.has(rua))
+                        : E.quadras;
+                    $("contaQuadras").textContent =
+                        `${vis.length}/${E.quadras.length}`;
+                    const box = $("listaQuadras");
+                    box.innerHTML = "";
+                    for (const q of vis) {
+                        const b = document.createElement("button");
+                        b.className = E.selec === q.idx ? "ativo" : "";
+                        b.innerHTML = `<span>${q.nome}<span class="rua">${q.ruaPrinc.replace(/^(RUA|AVENIDA|TRAVESSA) /, "")} · ${q.faces.size} faces</span></span>
+                   <span class="n">${q.casas.length}</span>`;
+                        b.addEventListener("click", () => selecionar(q.idx));
+                        box.appendChild(b);
+                    }
+                    if (!vis.length)
+                        box.innerHTML = `<p class="nota" style="padding:var(--space-2)">Nenhum quarteirão nessa rua.</p>`;
+                }
+                function selecionar(idx) {
+                    E.selec = E.selec === idx ? null : idx;
+                    pintar();
+                    desenharLista();
+                    if (E.selec !== null) {
+                        const q = E.quadras[E.selec];
+                        const b = L.latLngBounds(
+                            q.contorno.map((c) => [c[1], c[0]]),
+                        );
+                        map.fitBounds(b, { padding: [70, 70], maxZoom: 18 });
+                        const faces = [...q.faces.entries()]
+                            .sort((a, b) => a[0] - b[0])
+                            .map(
+                                ([f, l]) =>
+                                    `face ${f}: ${l.length} casas (${l[0].properties.rua.replace(/^(RUA|AVENIDA|TRAVESSA) /, "")})`,
+                            )
+                            .join(" · ");
+                        st(
+                            `<b>${q.nome}</b> — ${q.casas.length} casas · ${faces}`,
+                        );
+                    } else {
+                        map.fitBounds(cCasas.getBounds(), {
+                            padding: [26, 26],
+                        });
+                        st(
+                            `<b>${E.casas.length.toLocaleString("pt-BR")}</b> casas em ${E.quadras.length} quarteirões.`,
+                        );
+                    }
+                }
+                $("btnTodos").addEventListener("click", () => {
+                    if (E.selec !== null) selecionar(E.selec);
+                    else
+                        map.fitBounds(cCasas.getBounds(), {
+                            padding: [26, 26],
+                        });
+                });
+
+                /* ============ Busca ============ */
+                let realce = null;
+                $("busca").addEventListener("input", (e) => {
+                    const t = e.target.value.trim();
+                    if (realce) {
+                        map.removeLayer(realce);
+                        realce = null;
+                    }
+                    if (t.length < 3) {
+                        $("resBusca").textContent =
+                            "Digite a rua e, se quiser, o número.";
+                        return;
+                    }
+                    const num = (t.match(/\d+/) || [])[0];
+                    const texto = t
+                        .replace(/\d+/g, "")
+                        .replace(/[,\.]/g, "")
+                        .trim()
+                        .toUpperCase()
+                        .normalize("NFD")
+                        .replace(/[\u0300-\u036f]/g, "");
+                    const norm = (s) =>
+                        s
+                            .toUpperCase()
+                            .normalize("NFD")
+                            .replace(/[\u0300-\u036f]/g, "");
+                    let achados = E.casas.filter((f) => {
+                        const p = f.properties;
+                        const okRua = !texto || norm(p.rua).includes(texto);
+                        const okNum = !num || String(p.numero) === num;
+                        return okRua && okNum;
+                    });
+                    if (!achados.length) {
+                        $("resBusca").textContent =
+                            "Nenhum endereço encontrado.";
+                        return;
+                    }
+                    $("resBusca").innerHTML =
+                        `<b>${achados.length}</b> endereço(s). ${achados.length > 60 ? "Refine com o número." : "Destacados em laranja no mapa."}`;
+                    const mostrar = achados.slice(0, 400);
+                    realce = L.geoJSON(
+                        { type: "FeatureCollection", features: mostrar },
+                        {
+                            style: {
+                                color: "oklch(62% .19 45)",
+                                weight: 2,
+                                fillColor: "oklch(70% .18 55)",
+                                fillOpacity: 0.95,
+                            },
+                        },
+                    ).addTo(map);
+                    map.fitBounds(realce.getBounds(), {
+                        padding: [80, 80],
+                        maxZoom: 18,
+                    });
+                    if (achados.length === 1) {
+                        const p = achados[0].properties;
+                        st(
+                            `<b>${p.rua}, ${p.numero}</b> — quarteirão ${p._qn}, face ${p.face}, ${p.ordem_na_face}ª casa da face.`,
+                        );
+                    }
+                });
+
+                /* ============ Controles ============ */
+                function segmento(id, aoMudar) {
+                    $(id).addEventListener("click", (e) => {
+                        const b = e.target.closest("button");
+                        if (!b) return;
+                        [...$(id).children].forEach((x) =>
+                            x.setAttribute("aria-pressed", String(x === b)),
+                        );
+                        aoMudar(b.dataset.v || b.dataset.m || b.dataset.f);
+                    });
+                }
+
+                /* ============ Modo de Edição: Funções e Lógica ============ */
+                const mapaCasasPorId = new Map();
+                const mapaCamadasCasas = new Map();
+                const cSelecaoOverlay = L.layerGroup().addTo(map);
+                const cPreviewOverlay = L.layerGroup().addTo(map);
+
+                let previewQuarteiraoAtivo = null;
+
+                const undoStack = [];
+                const redoStack = [];
+
+                function salvarSnapshotHistorico() {
+                    undoStack.push({
+                        ajustes: JSON.parse(JSON.stringify(E.ajustes)),
+                        grupos: JSON.parse(JSON.stringify(E.grupos)),
+                        selecionadas: Array.from(E.selecionadas)
+                    });
+                    if (undoStack.length > 50) undoStack.shift();
+                    redoStack.length = 0;
+                    atualizarBotoesHistorico();
+                }
+
+                function atualizarBotoesHistorico() {
+                    const btnD = $("btnDesfazer");
+                    const btnR = $("btnRefazer");
+                    if (btnD) btnD.disabled = undoStack.length === 0;
+                    if (btnR) btnR.disabled = redoStack.length === 0;
+                }
+
+                function desfazer() {
+                    if (undoStack.length === 0) return;
+                    redoStack.push({
+                        ajustes: JSON.parse(JSON.stringify(E.ajustes)),
+                        grupos: JSON.parse(JSON.stringify(E.grupos)),
+                        selecionadas: Array.from(E.selecionadas)
+                    });
+                    const snapshot = undoStack.pop();
+                    aplicarSnapshot(snapshot);
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    st("Ação desfeita.");
+                }
+
+                function refazer() {
+                    if (redoStack.length === 0) return;
+                    undoStack.push({
+                        ajustes: JSON.parse(JSON.stringify(E.ajustes)),
+                        grupos: JSON.parse(JSON.stringify(E.grupos)),
+                        selecionadas: Array.from(E.selecionadas)
+                    });
+                    const snapshot = redoStack.pop();
+                    aplicarSnapshot(snapshot);
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    st("Ação refeita.");
+                }
+
+                function aplicarSnapshot(snapshot) {
+                    cancelarPreviewQuarteirao();
+                    invalidarSnapshotEspacamento();
+                    E.ajustes = JSON.parse(JSON.stringify(snapshot.ajustes || {}));
+                    E.grupos = JSON.parse(JSON.stringify(snapshot.grupos || []));
+                    E.selecionadas = new Set(snapshot.selecionadas || []);
+
+                    for (const f of E.casas) {
+                        const id = f.properties.id;
+                        if (E.ajustes[id] && E.ajustes[id].coords) {
+                            f.properties._anelUni = JSON.parse(JSON.stringify(E.ajustes[id].coords));
+                        } else {
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                        }
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [f.properties._anelUni];
+                            f.properties._c = centroide(f.properties._anelUni);
+                            const layer = mapaCamadasCasas.get(id);
+                            if (layer) {
+                                layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
+                                layer.redraw();
+                            }
+                        }
+                    }
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    atualizarBotoesHistorico();
+                    pintar();
+                    if (typeof desenharNumeracaoCasas === "function") desenharNumeracaoCasas();
+                }
+
+                // ============ Padronização dos Lotes (Metros / EPSG:3857) ============
+                function gerarLotePadronizado(anelCoords, larguraM, profundidadeM) {
+                    if (!anelCoords || anelCoords.length < 4) return anelCoords;
+                    const ptsM = [];
+                    for (let i = 0; i < Math.min(4, anelCoords.length); i++) {
+                        const p = L.CRS.EPSG3857.project(L.latLng(anelCoords[i][1], anelCoords[i][0]));
+                        ptsM.push(p);
+                    }
+                    const cx = (ptsM[0].x + ptsM[1].x + ptsM[2].x + ptsM[3].x) / 4;
+                    const cy = (ptsM[0].y + ptsM[1].y + ptsM[2].y + ptsM[3].y) / 4;
+
+                    // Vetor do bordo frontal (largura)
+                    let vx = ptsM[1].x - ptsM[0].x;
+                    let vy = ptsM[1].y - ptsM[0].y;
+                    let lenV = Math.hypot(vx, vy);
+                    let ux = 1, uy = 0;
+                    if (lenV > 0.001) {
+                        ux = vx / lenV;
+                        uy = vy / lenV;
+                    }
+
+                    // Vetor do bordo lateral (profundidade)
+                    let sx = ptsM[2].x - ptsM[1].x;
+                    let sy = ptsM[2].y - ptsM[1].y;
+                    let lenS = Math.hypot(sx, sy);
+                    let nx = -uy, ny = ux;
+                    if (lenS > 0.001) {
+                        nx = sx / lenS;
+                        ny = sy / lenS;
+                    }
+
+                    const hw = larguraM / 2;
+                    const hd = profundidadeM / 2;
+                    const cantos = [
+                        { x: cx - hw * ux - hd * nx, y: cy - hw * uy - hd * ny },
+                        { x: cx + hw * ux - hd * nx, y: cy + hw * uy - hd * ny },
+                        { x: cx + hw * ux + hd * nx, y: cy + hw * uy + hd * ny },
+                        { x: cx - hw * ux + hd * nx, y: cy - hw * uy + hd * ny },
+                    ];
+                    cantos.push(cantos[0]);
+                    return cantos.map((pt) => {
+                        const ll = L.CRS.EPSG3857.unproject(L.point(pt.x, pt.y));
+                        return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                    });
+                }
+
+                // Transformações em metros projetados (EPSG:3857) - sem deformações
+                function aplicarTranslacaoMetros(anel, dx, dy) {
+                    return anel.map((pt) => {
+                        const p = L.CRS.EPSG3857.project(L.latLng(pt[1], pt[0]));
+                        p.x += dx;
+                        p.y += dy;
+                        const ll = L.CRS.EPSG3857.unproject(p);
+                        return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                    });
+                }
+
+                function aplicarRotacaoMetros(anel, centroMetros, radianos) {
+                    const cos = Math.cos(radianos);
+                    const sin = Math.sin(radianos);
+                    return anel.map((pt) => {
+                        const p = L.CRS.EPSG3857.project(L.latLng(pt[1], pt[0]));
+                        const rx = p.x - centroMetros.x;
+                        const ry = p.y - centroMetros.y;
+                        const nx = centroMetros.x + rx * cos - ry * sin;
+                        const ny = centroMetros.y + rx * sin + ry * cos;
+                        const ll = L.CRS.EPSG3857.unproject(L.point(nx, ny));
+                        return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                    });
+                }
+
+                function centroideMetrosLote(anel) {
+                    if (!anel || !anel.length) return { x: 0, y: 0 };
+                    const n = Math.min(4, anel.length > 4 ? 4 : (anel.length - 1 || 1));
+                    let sx = 0, sy = 0;
+                    for (let i = 0; i < n; i++) {
+                        const p = L.CRS.EPSG3857.project(L.latLng(anel[i][1], anel[i][0]));
+                        sx += p.x;
+                        sy += p.y;
+                    }
+                    return { x: sx / n, y: sy / n };
+                }
+
+                function calcularCentroideMetros(features) {
+                    let totalX = 0, totalY = 0, totalPts = 0;
+                    for (const f of features) {
+                        const anel = f.properties._anelUni;
+                        for (let i = 0; i < anel.length - 1; i++) {
+                            const p = L.CRS.EPSG3857.project(L.latLng(anel[i][1], anel[i][0]));
+                            totalX += p.x;
+                            totalY += p.y;
+                            totalPts++;
+                        }
+                    }
+                    if (totalPts === 0) return { x: 0, y: 0 };
+                    return { x: totalX / totalPts, y: totalY / totalPts };
+                }
+
+                // ============ Grupos e Quarteirões ============
+                function obterGrupo(id) {
+                    if (!E.grupos) return null;
+                    for (const g of E.grupos) {
+                        const casas = Array.isArray(g) ? g : g.casas;
+                        if (casas && casas.includes(id)) {
+                            return Array.isArray(g)
+                                ? { id: "grp-" + casas[0], tipo: "grupo", casas }
+                                : g;
+                        }
+                    }
+                    return null;
+                }
+
+                function obterIdGrupo(id) {
+                    const g = obterGrupo(id);
+                    return g ? g.id : null;
+                }
+
+                function expandirGrupos(conjuntoIds) {
+                    const expandido = new Set(conjuntoIds);
+                    for (const id of conjuntoIds) {
+                        const g = obterGrupo(id);
+                        if (g && g.casas) {
+                            for (const membro of g.casas) expandido.add(membro);
+                        }
+                    }
+                    return expandido;
+                }
+
+                function agrupar() {
+                    if (E.selecionadas.size < 2) return;
+                    invalidarSnapshotEspacamento();
+                    salvarSnapshotHistorico();
+                    const ids = Array.from(E.selecionadas);
+                    const novoGrpId = "grp-" + Date.now();
+
+                    // Remove de grupos anteriores
+                    E.grupos = E.grupos
+                        .map((g) => ({
+                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                            tipo: g.tipo || "grupo",
+                            casas: (g.casas || g).filter((id) => !E.selecionadas.has(id))
+                        }))
+                        .filter((g) => g.casas.length >= 2);
+
+                    E.grupos.push({
+                        id: novoGrpId,
+                        tipo: "grupo",
+                        casas: ids
+                    });
+
+                    for (const id of ids) {
+                        if (!E.ajustes[id]) {
+                            const item = mapaCasasPorId.get(id);
+                            const anel = item.properties._anelUni;
+                            const c = centroide(anel);
+                            E.ajustes[id] = {
+                                lng: Number(c[0].toFixed(7)),
+                                lat: Number(c[1].toFixed(7)),
+                                rot_deg: 0,
+                                grupo_id: novoGrpId,
+                                coords: anel
+                            };
+                        } else {
+                            E.ajustes[id].grupo_id = novoGrpId;
+                        }
+                    }
+
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st(`<b>${ids.length}</b> casas agrupadas.`);
+                }
+
+                function desagrupar() {
+                    if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
+                    salvarSnapshotHistorico();
+
+                    E.grupos = E.grupos
+                        .map((g) => ({
+                            id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                            tipo: g.tipo || "grupo",
+                            casas: (g.casas || g).filter((id) => !E.selecionadas.has(id))
+                        }))
+                        .filter((g) => g.casas.length >= 2);
+
+                    for (const id of E.selecionadas) {
+                        if (E.ajustes[id]) {
+                            E.ajustes[id].grupo_id = null;
+                        }
+                    }
+
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st("Casas selecionadas desagrupadas.");
+                }
+
+                // ============ Agrupar em Quarteirão (Formato de Referência) ============
+                function calcularQuarteiraoPadronizado(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    // 1. Centróides em EPSG:3857
+                    const ptsM = feats.map((f) => {
+                        const cLL = centroide(f.properties._anelUni);
+                        const pM = L.CRS.EPSG3857.project(L.latLng(cLL[1], cLL[0]));
+                        return { f, x: pM.x, y: pM.y };
+                    });
+
+                    const cxTotal = ptsM.reduce((s, p) => s + p.x, 0) / ptsM.length;
+                    const cyTotal = ptsM.reduce((s, p) => s + p.y, 0) / ptsM.length;
+
+                    // 2. Direção dominante (PCA) do quarteirão
+                    let sxx = 0, syy = 0, sxy = 0;
+                    for (const p of ptsM) {
+                        const dx = p.x - cxTotal;
+                        const dy = p.y - cyTotal;
+                        sxx += dx * dx;
+                        syy += dy * dy;
+                        sxy += dx * dy;
+                    }
+                    const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    let nx = -uy;
+                    let ny = ux;
+
+                    // 3. Divisão em duas fileiras
+                    const facesMap = new Map();
+                    for (const item of ptsM) {
+                        const faceVal = item.f.properties.face;
+                        if (!facesMap.has(faceVal)) facesMap.set(faceVal, []);
+                        facesMap.get(faceVal).push(item);
+                    }
+
+                    let fileira1 = [];
+                    let fileira2 = [];
+
+                    if (facesMap.size === 2) {
+                        const chaves = Array.from(facesMap.keys()).sort((a, b) => a - b);
+                        fileira1 = facesMap.get(chaves[0]);
+                        fileira2 = facesMap.get(chaves[1]);
+                    } else {
+                        // Divide pela posição em relação ao eixo principal
+                        const enriquecidos = ptsM.map((item) => {
+                            const distN = (item.x - cxTotal) * nx + (item.y - cyTotal) * ny;
+                            return { ...item, distN };
+                        }).sort((a, b) => a.distN - b.distN);
+
+                        const meio = Math.floor(enriquecidos.length / 2);
+                        fileira1 = enriquecidos.slice(0, meio);
+                        fileira2 = enriquecidos.slice(meio);
+                    }
+
+                    // Determina qual fileira fica em +n e qual em -n
+                    const avgN1 = fileira1.reduce((s, p) => s + ((p.x - cxTotal) * nx + (p.y - cyTotal) * ny), 0) / (fileira1.length || 1);
+                    const avgN2 = fileira2.reduce((s, p) => s + ((p.x - cxTotal) * nx + (p.y - cyTotal) * ny), 0) / (fileira2.length || 1);
+
+                    if (avgN1 > avgN2) {
+                        const tmp = fileira1;
+                        fileira1 = fileira2;
+                        fileira2 = tmp;
+                    }
+
+                    // 4. Ordenação dos lotes por número da casa
+                    const ordenarFileira = (fil) => {
+                        return fil.slice().sort((a, b) => {
+                            const numA = Number(a.f.properties.numero);
+                            const numB = Number(b.f.properties.numero);
+                            if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+                            const tA = (a.x - cxTotal) * ux + (a.y - cyTotal) * uy;
+                            const tB = (b.x - cxTotal) * ux + (b.y - cyTotal) * uy;
+                            return tA - tB;
+                        });
+                    };
+
+                    const fil1Ord = ordenarFileira(fileira1);
+                    const fil2Ord = ordenarFileira(fileira2);
+
+                    // Ajusta o sentido do eixo u para coincidir com a progressão da numeração
+                    const checkSentido = (fil) => {
+                        if (fil.length < 2) return 0;
+                        const pPrimeiro = (fil[0].x - cxTotal) * ux + (fil[0].y - cyTotal) * uy;
+                        const pUltimo = (fil[fil.length - 1].x - cxTotal) * ux + (fil[fil.length - 1].y - cyTotal) * uy;
+                        return pUltimo - pPrimeiro;
+                    };
+                    const s1 = checkSentido(fil1Ord);
+                    const s2 = checkSentido(fil2Ord);
+                    if (s1 + s2 < 0) {
+                        ux = -ux; uy = -uy;
+                        nx = -nx; ny = -ny;
+                    }
+
+                    // 5. Posicionamento padronizado em 2 fileiras paralelas e alinhadas
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+                    const S = PADRAO_ESPACAMENTO_M;
+                    const G = PADRAO_INTERVALO_FILEIRAS_M;
+
+                    const nMax = Math.max(fil1Ord.length, fil2Ord.length);
+                    const passoLote = W + S;
+                    const distCentroFileiras = D + G;
+
+                    const resultadoAjustes = new Map();
+
+                    const gerarPoligonoMetros = (cxLote, cyLote) => {
+                        const hw = W / 2;
+                        const hd = D / 2;
+                        const cantos = [
+                            { x: cxLote - hw * ux - hd * nx, y: cyLote - hw * uy - hd * ny },
+                            { x: cxLote + hw * ux - hd * nx, y: cyLote + hw * uy - hd * ny },
+                            { x: cxLote + hw * ux + hd * nx, y: cyLote + hw * uy + hd * ny },
+                            { x: cxLote - hw * ux + hd * nx, y: cyLote - hw * uy + hd * ny },
+                        ];
+                        cantos.push(cantos[0]);
+                        return cantos.map((pt) => {
+                            const ll = L.CRS.EPSG3857.unproject(L.point(pt.x, pt.y));
+                            return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                        });
+                    };
+
+                    // Fileira 1 (lado -n)
+                    const offsetN1 = -distCentroFileiras / 2;
+                    for (let k = 0; k < fil1Ord.length; k++) {
+                        const tk = (k - (nMax - 1) / 2) * passoLote;
+                        const cxLote = cxTotal + tk * ux + offsetN1 * nx;
+                        const cyLote = cyTotal + tk * uy + offsetN1 * ny;
+                        const anel = gerarPoligonoMetros(cxLote, cyLote);
+                        const cLL = centroide(anel);
+                        resultadoAjustes.set(fil1Ord[k].f.properties.id, {
+                            coords: anel,
+                            lng: cLL[0],
+                            lat: cLL[1],
+                            rot_deg: Number(((theta * 180) / Math.PI).toFixed(2))
+                        });
+                    }
+
+                    // Fileira 2 (lado +n)
+                    const offsetN2 = distCentroFileiras / 2;
+                    for (let k = 0; k < fil2Ord.length; k++) {
+                        const tk = (k - (nMax - 1) / 2) * passoLote;
+                        const cxLote = cxTotal + tk * ux + offsetN2 * nx;
+                        const cyLote = cyTotal + tk * uy + offsetN2 * ny;
+                        const anel = gerarPoligonoMetros(cxLote, cyLote);
+                        const cLL = centroide(anel);
+                        resultadoAjustes.set(fil2Ord[k].f.properties.id, {
+                            coords: anel,
+                            lng: cLL[0],
+                            lat: cLL[1],
+                            rot_deg: Number(((theta * 180) / Math.PI).toFixed(2))
+                        });
+                    }
+
+                    return {
+                        resultadoAjustes,
+                        totalCasas: feats.length,
+                        n1: fil1Ord.length,
+                        n2: fil2Ord.length
+                    };
+                }
+
+                function iniciarAgrupamentoQuarteirao() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularQuarteiraoPadronizado(E.selecionadas);
+                    if (!calc) return;
+                    calc.tipo = "quarteirao";
+                    calc.titulo = `Pré-visualização Quarteirão: ${calc.totalCasas} casas (${calc.n1} na Face A, ${calc.n2} na Face B)`;
+                    iniciarPreviewAcao(calc);
+                }
+
+                function confirmarAgrupamentoQuarteirao() {
+                    confirmarPreviewAcao();
+                }
+
+                function cancelarPreviewQuarteirao() {
+                    cancelarPreviewAcao();
+                }
+
+                // ============ Numeração das Casas em Canvas (v1.3.3) ============
+                function ocultarNumeracaoCanvas() {
+                    const canvas = $("canvasNumeracao");
+                    if (!canvas) return;
+                    const ctx = canvas.getContext("2d");
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                }
+
+                // Obtém os vértices exatos do polígono atualmente desenhado pelo Leaflet na tela
+                function obterVerticesPoligonoRenderizado(f) {
+                    const layer = mapaCamadasCasas.get(f.properties.id);
+                    if (layer && typeof layer.getLatLngs === "function") {
+                        const lls = layer.getLatLngs();
+                        const ring = Array.isArray(lls[0]) ? lls[0] : lls;
+                        if (ring && ring.length >= 3) {
+                            // Descarta o último vértice se for cópia do primeiro
+                            const n = (ring.length > 3 && ring[0].lat === ring[ring.length - 1].lat && ring[0].lng === ring[ring.length - 1].lng)
+                                ? ring.length - 1
+                                : ring.length;
+                            return ring.slice(0, n);
+                        }
+                    }
+                    const anel = (E.posicao === "uniforme" && f.properties._anelUni) ? f.properties._anelUni : f.geometry.coordinates[0];
+                    if (!anel || anel.length < 3) return null;
+                    const n = (anel.length > 3 && anel[0][0] === anel[anel.length - 1][0] && anel[0][1] === anel[anel.length - 1][1])
+                        ? anel.length - 1
+                        : anel.length;
+                    const arr = [];
+                    for (let i = 0; i < n; i++) {
+                        arr.push(L.latLng(anel[i][1], anel[i][0]));
+                    }
+                    return arr;
+                }
+
+                // Calcula o centróide exato do polígono em pixels de tela
+                function calcularCentroPoligonoPixels(f) {
+                    const vertices = obterVerticesPoligonoRenderizado(f);
+                    if (!vertices || vertices.length < 3) return null;
+                    const pts = vertices.map((ll) => map.latLngToContainerPoint(ll));
+                    const n = pts.length;
+                    return {
+                        x: pts.reduce((s, p) => s + p.x, 0) / n,
+                        y: pts.reduce((s, p) => s + p.y, 0) / n,
+                        pts,
+                        vertices
+                    };
+                }
+
+                function desenharNumeracaoCasas() {
+                    const canvas = $("canvasNumeracao");
+                    if (!canvas) return;
+                    const mapEl = map.getContainer();
+                    const w = mapEl.clientWidth;
+                    const h = mapEl.clientHeight;
+                    if (!w || !h) return;
+
+                    const dpr = window.devicePixelRatio || 1;
+                    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+                        canvas.width = Math.round(w * dpr);
+                        canvas.height = Math.round(h * dpr);
+                    }
+                    const ctx = canvas.getContext("2d");
+                    // Limpeza total do buffer físico para evitar qualquer fantasma ou duplicidade
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+
+                    if (!E.numeracaoCasas) return;
+                    const zoom = map.getZoom();
+                    if (zoom < 18) return; // Legível apenas em zoom >= 18
+
+                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+
+                    const isDark = temaEscuro;
+                    const textColor = isDark ? "#ffffff" : "#111827";
+                    const strokeColor = isDark ? "rgba(0,0,0,0.92)" : "rgba(255,255,255,0.96)";
+
+                    const bounds = map.getBounds();
+                    const rotulosDesenhados = [];
+
+                    for (const f of E.casas) {
+                        const num = f.properties.numero;
+                        if (!num) continue;
+
+                        const geo = calcularCentroPoligonoPixels(f);
+                        if (!geo) continue;
+
+                        const { x: cx, y: cy, pts, vertices } = geo;
+
+                        // Se o centroide ou todos os vértices estiverem fora dos limites da tela, descarta
+                        if (cx < -40 || cx > w + 40 || cy < -40 || cy > h + 40) continue;
+                        if (!vertices.some((ll) => bounds.contains(ll))) continue;
+
+                        // Dimensões do lote projetadas na tela
+                        let menorLado = Infinity;
+                        for (let i = 0; i < pts.length; i++) {
+                            const p1 = pts[i];
+                            const p2 = pts[(i + 1) % pts.length];
+                            const lado = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                            if (lado < menorLado) menorLado = lado;
+                        }
+
+                        // Se o lote for menor que 13 pixels na tela, oculta o rótulo para não poluir
+                        if (menorLado < 13) continue;
+
+                        // Ajusta a fonte dinamicamente à largura do polígono com margem interna
+                        let fontSize = Math.max(8, Math.min(13, Math.round(menorLado * 0.44)));
+                        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                        let metrics = ctx.measureText(num);
+
+                        // Se o texto for mais largo que 86% da menor dimensão do lote, reduz a fonte
+                        if (metrics.width > menorLado * 0.86 && fontSize > 8) {
+                            fontSize = 8;
+                            ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                            metrics = ctx.measureText(num);
+                        }
+
+                        // Se mesmo com a menor fonte não couber dentro do lote, oculta para não sobrepor
+                        if (metrics.width > menorLado * 0.90) {
+                            continue;
+                        }
+
+                        // Detecção de colisão com rótulos já desenhados na mesma tela
+                        const halfW = metrics.width / 2 + 1.5;
+                        const halfH = fontSize / 2 + 1.5;
+                        let colide = false;
+                        for (const r of rotulosDesenhados) {
+                            if (Math.abs(cx - r.cx) < (halfW + r.halfW) && Math.abs(cy - r.cy) < (halfH + r.halfH)) {
+                                colide = true;
+                                break;
+                            }
+                        }
+                        if (colide) continue;
+
+                        rotulosDesenhados.push({ cx, cy, halfW, halfH });
+
+                        // Desenha o número no centro geométrico exato do polígono
+                        ctx.lineWidth = 2.5;
+                        ctx.strokeStyle = strokeColor;
+                        ctx.strokeText(num, cx, cy);
+                        ctx.fillStyle = textColor;
+                        ctx.fillText(num, cx, cy);
+                    }
+                }
+
+                function alternarNumeracaoCasas() {
+                    E.numeracaoCasas = !E.numeracaoCasas;
+                    localStorage.setItem("sig_salvacao_numeracao_casas", String(E.numeracaoCasas));
+                    desenharNumeracaoCasas();
+                    st(`Numeração das casas <b>${E.numeracaoCasas ? "ativada" : "desativada"}</b>.`);
+                }
+
+                // ============ Verificação Obrigatória da Numeração (Console) ============
+                window.verificarNumeracao = function () {
+                    if (!E.casas || !E.casas.length) {
+                        return { totalVisiveis: 0, desviosMaior1Px: 0, maxDesvio: 0, conforme: true };
+                    }
+                    const bounds = map.getBounds();
+                    let totalVisiveis = 0;
+                    let desviosMaior1Px = 0;
+                    let maxDesvio = 0;
+                    const desviosLista = [];
+
+                    for (const f of E.casas) {
+                        const geo = calcularCentroPoligonoPixels(f);
+                        if (!geo) continue;
+                        const { x: cx, y: cy, vertices } = geo;
+                        if (!vertices.some((ll) => bounds.contains(ll))) continue;
+
+                        totalVisiveis++;
+
+                        // Calcula o centroide dos vértices em pixels
+                        const pts = vertices.map((ll) => map.latLngToContainerPoint(ll));
+                        const polyCx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+                        const polyCy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+
+                        // Desvio entre a posição do rótulo e o centroide do polígono
+                        const desvio = Math.hypot(cx - polyCx, cy - polyCy);
+                        if (desvio > maxDesvio) maxDesvio = desvio;
+
+                        if (desvio > 1.0) {
+                            desviosMaior1Px++;
+                            desviosLista.push({
+                                id: f.properties.id,
+                                numero: f.properties.numero,
+                                desvio: Number(desvio.toFixed(4)),
+                                polyCenter: [Number(polyCx.toFixed(2)), Number(polyCy.toFixed(2))],
+                                labelCenter: [Number(cx.toFixed(2)), Number(cy.toFixed(2))]
+                            });
+                        }
+                    }
+
+                    const relatorio = {
+                        versao: APP_VERSION,
+                        zoom: map.getZoom(),
+                        modo: E.modoEdicao ? "Edição" : "Visualização",
+                        posicao: E.posicao,
+                        totalVisiveis,
+                        desviosMaior1Px,
+                        maxDesvioPx: Number(maxDesvio.toFixed(4)),
+                        conforme: desviosMaior1Px === 0,
+                        amostraInconformes: desviosLista.slice(0, 5)
+                    };
+
+                    console.log("[SIG Salvação] Verificação de Numeração:", relatorio);
+                    return relatorio;
+                };
+
+                // ============ Alinhamentos, Nivelamento e Espaçamentos ============
+                let snapshotBaseEspacamento = null;
+                let historicoEspacamentoSalvo = false;
+
+                function invalidarSnapshotEspacamento() {
+                    snapshotBaseEspacamento = null;
+                    historicoEspacamentoSalvo = false;
+                }
+
+                function formatarValorEspacamento(valor, irregular) {
+                    if (valor === null || valor === undefined || isNaN(valor)) return "0,0";
+                    const sinal = valor < -0.05 ? "-" : "";
+                    const num = Math.abs(valor).toFixed(1).replace(".", ",");
+                    const base = (valor >= -0.05 && valor < 0.05) ? "0,0" : (sinal + num);
+                    return irregular ? `~ ${base}` : base;
+                }
+
+                function parseValEspacamento(str) {
+                    if (!str) return NaN;
+                    const limpo = String(str).replace("~", "").trim().replace(",", ".");
+                    const val = parseFloat(limpo);
+                    if (isNaN(val) || val < 0) return NaN;
+                    return Math.round(val * 10) / 10;
+                }
+
+                // Ajuste de reta / PCA das posições para encontrar o eixo principal da seleção
+                function calcularEixoPrincipalSelecao(features) {
+                    if (!features || features.length < 2) return 0;
+                    const pts = features.map((f) => centroideMetrosLote(f.properties._anelUni));
+                    const m = pts.length;
+                    const mx = pts.reduce((s, p) => s + p.x, 0) / m;
+                    const my = pts.reduce((s, p) => s + p.y, 0) / m;
+
+                    let sxx = 0, syy = 0, sxy = 0;
+                    for (const p of pts) {
+                        const dx = p.x - mx;
+                        const dy = p.y - my;
+                        sxx += dx * dx;
+                        syy += dy * dy;
+                        sxy += dx * dy;
+                    }
+                    return 0.5 * Math.atan2(2 * sxy, sxx - syy);
+                }
+
+                // 1. Nivelar na horizontal (ajustar rotação da seleção como um bloco)
+                function calcularNivelamentoHorizontal(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+                    // Rotação mínima para nivelar o eixo à horizontal: delta = -theta
+                    const deltaRad = -theta;
+                    const deltaDeg = Number(((deltaRad * 180) / Math.PI).toFixed(1));
+
+                    const resultadoAjustes = new Map();
+                    for (const f of feats) {
+                        const id = f.properties.id;
+                        const startRing = f.properties._anelUni;
+                        const novoAnel = aplicarRotacaoMetros(startRing, centroMetros, deltaRad);
+                        const cLL = centroide(novoAnel);
+                        const prevRot = (E.ajustes[id] && E.ajustes[id].rot_deg) || 0;
+                        resultadoAjustes.set(id, {
+                            lng: Number(cLL[0].toFixed(7)),
+                            lat: Number(cLL[1].toFixed(7)),
+                            rot_deg: Number(((prevRot + deltaDeg) % 360).toFixed(1)),
+                            coords: novoAnel,
+                            grupo_id: obterIdGrupo(id)
+                        });
+                    }
+                    return {
+                        tipo: "nivelar",
+                        titulo: `Pré-visualização: Nivelar na horizontal (${feats.length} casas, rotação ${deltaDeg > 0 ? "+" : ""}${deltaDeg}°)`,
+                        resultadoAjustes,
+                        totalCasas: feats.length
+                    };
+                }
+
+                // 2. Alinhar em uma única linha horizontal
+                function calcularAlinhamentoLinha(conjuntoIds) {
+                    const feats = Array.from(conjuntoIds).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) return null;
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+
+                    // Eixo unitário ao longo da reta principal
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    if (ux < 0 || (ux === 0 && uy < 0)) { ux = -ux; uy = -uy; } // Orientação consistente
+
+                    // Projeta cada casa ao longo do eixo u para definir a ordem
+                    const casasOrdenadas = feats.map((f) => {
+                        const c = centroide(f.properties._anelUni);
+                        const pMetros = L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
+                        const t = (pMetros.x - centroMetros.x) * ux + (pMetros.y - centroMetros.y) * uy;
+                        return { f, t };
+                    }).sort((a, b) => a.t - b.t).map((it) => it.f);
+
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+                    const S = PADRAO_ESPACAMENTO_M;
+                    const passo = W + S;
+                    const m = casasOrdenadas.length;
+                    const x0 = centroMetros.x - ((m - 1) / 2) * passo;
+
+                    const resultadoAjustes = new Map();
+                    casasOrdenadas.forEach((f, k) => {
+                        const id = f.properties.id;
+                        const cx = x0 + k * passo;
+                        const cy = centroMetros.y;
+                        const hw = W / 2;
+                        const hd = D / 2;
+
+                        // Retângulo reto (orientação padrão)
+                        const ringMetros = [
+                            [cx - hw, cy - hd],
+                            [cx + hw, cy - hd],
+                            [cx + hw, cy + hd],
+                            [cx - hw, cy + hd],
+                            [cx - hw, cy - hd]
+                        ];
+                        const coords = ringMetros.map(([mx, my]) => {
+                            const ll = L.CRS.EPSG3857.unproject(L.point(mx, my));
+                            return [Number(ll.lng.toFixed(7)), Number(ll.lat.toFixed(7))];
+                        });
+                        const cLL = centroide(coords);
+                        resultadoAjustes.set(id, {
+                            lng: Number(cLL[0].toFixed(7)),
+                            lat: Number(cLL[1].toFixed(7)),
+                            rot_deg: 0,
+                            coords: coords,
+                            grupo_id: obterIdGrupo(id)
+                        });
+                    });
+
+                    return {
+                        tipo: "linha",
+                        titulo: `Pré-visualização: Alinhar em uma linha (${m} casas alinhadas na horizontal)`,
+                        resultadoAjustes,
+                        totalCasas: m
+                    };
+                }
+
+                // ============ Modelo Determinístico de Espaçamento H e V ============
+                function prepararSnapshotEspacamento() {
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) {
+                        snapshotBaseEspacamento = null;
+                        historicoEspacamentoSalvo = false;
+                        return null;
+                    }
+
+                    const centroMetros = calcularCentroideMetros(feats);
+                    const theta = calcularEixoPrincipalSelecao(feats);
+                    let ux = Math.cos(theta);
+                    let uy = Math.sin(theta);
+                    if (ux < 0 || (ux === 0 && uy < 0)) { ux = -ux; uy = -uy; }
+                    const nx = -uy;
+                    const ny = ux;
+
+                    // Projeção dos centros métricos exatos de cada lote no sistema coordenado da fileira (u, n)
+                    const itens = feats.map((f) => {
+                        const pM = centroideMetrosLote(f.properties._anelUni);
+                        const t = (pM.x - centroMetros.x) * ux + (pM.y - centroMetros.y) * uy;
+                        const d = (pM.x - centroMetros.x) * nx + (pM.y - centroMetros.y) * ny;
+                        return {
+                            id: f.properties.id,
+                            f,
+                            t,
+                            d,
+                            pM,
+                            coordsBase: JSON.parse(JSON.stringify(f.properties._anelUni)),
+                            rotBase: (E.ajustes[f.properties.id] && E.ajustes[f.properties.id].rot_deg) || 0
+                        };
+                    });
+
+                    // Detecção de fileiras por tolerância consecutiva na coordenada perpendicular d
+                    const ordenadosD = [...itens].sort((a, b) => a.d - b.d);
+                    const fileiras = [];
+                    let filAtual = [ordenadosD[0]];
+                    for (let k = 1; k < ordenadosD.length; k++) {
+                        const it = ordenadosD[k];
+                        const prev = ordenadosD[k - 1];
+                        if ((it.d - prev.d) > (PADRAO_PROFUNDIDADE_M * 0.5)) {
+                            fileiras.push(filAtual);
+                            filAtual = [it];
+                        } else {
+                            filAtual.push(it);
+                        }
+                    }
+                    if (filAtual.length) fileiras.push(filAtual);
+
+                    // Para cada fileira, ordena ao longo do eixo u e calcula âncoras locais
+                    fileiras.forEach((fil) => {
+                        fil.sort((a, b) => a.t - b.t);
+                        fil.tBaseMedia = fil.reduce((s, it) => s + it.t, 0) / fil.length;
+                        fil.dBaseMedia = fil.reduce((s, it) => s + it.d, 0) / fil.length;
+                    });
+
+                    // Calcula o espaçamento horizontal real atual (entre bordas de lotes adjacentes: deltaT - W)
+                    const gapsH = [];
+                    fileiras.forEach((fil) => {
+                        for (let k = 0; k < fil.length - 1; k++) {
+                            const distBordas = (fil[k + 1].t - fil[k].t) - PADRAO_LARGURA_M;
+                            gapsH.push(distBordas);
+                        }
+                    });
+                    const espHMedio = gapsH.length
+                        ? (gapsH.reduce((a, b) => a + b, 0) / gapsH.length)
+                        : PADRAO_ESPACAMENTO_M;
+                    const espHIrregular = gapsH.length >= 2
+                        ? (Math.max(...gapsH) - Math.min(...gapsH)) > 0.05
+                        : false;
+
+                    // Calcula o espaçamento vertical real atual (entre centros das fileiras - D)
+                    const gapsV = [];
+                    for (let r = 0; r < fileiras.length - 1; r++) {
+                        const distBordasV = (fileiras[r + 1].dBaseMedia - fileiras[r].dBaseMedia) - PADRAO_PROFUNDIDADE_M;
+                        gapsV.push(distBordasV);
+                    }
+                    const espVMedio = gapsV.length
+                        ? (gapsV.reduce((a, b) => a + b, 0) / gapsV.length)
+                        : 0.0;
+                    const espVIrregular = gapsV.length >= 2
+                        ? (Math.max(...gapsV) - Math.min(...gapsV)) > 0.05
+                        : false;
+
+                    snapshotBaseEspacamento = {
+                        feats,
+                        centroMetros,
+                        ux,
+                        uy,
+                        nx,
+                        ny,
+                        fileiras,
+                        temDuasFileiras: fileiras.length >= 2,
+                        espHAtual: Number(espHMedio.toFixed(1)),
+                        espVAtual: Number(espVMedio.toFixed(1)),
+                        espHIrregular,
+                        espVIrregular,
+                        targetH: null,
+                        targetV: null
+                    };
+
+                    return snapshotBaseEspacamento;
+                }
+
+                function aplicarEspacamentoDeterministo(eixo, novoEspacamentoM) {
+                    if (!snapshotBaseEspacamento) {
+                        prepararSnapshotEspacamento();
+                    }
+                    if (!snapshotBaseEspacamento) return;
+
+                    const snap = snapshotBaseEspacamento;
+                    const W = PADRAO_LARGURA_M;
+                    const D = PADRAO_PROFUNDIDADE_M;
+
+                    // Registra no histórico uma única vez por sessão contínua de ajuste
+                    if (!historicoEspacamentoSalvo) {
+                        salvarSnapshotHistorico();
+                        historicoEspacamentoSalvo = true;
+                    }
+
+                    const valorAlvo = Math.max(0, novoEspacamentoM);
+
+                    if (eixo === "h") {
+                        snap.targetH = valorAlvo;
+                        snap.espHAtual = valorAlvo;
+                        snap.espHIrregular = false;
+                    } else if (eixo === "v") {
+                        if (!snap.temDuasFileiras || snap.fileiras.length < 2) {
+                            st("O espaçamento vertical requer ao menos duas fileiras na seleção.");
+                            return;
+                        }
+                        snap.targetV = valorAlvo;
+                        snap.espVAtual = valorAlvo;
+                        snap.espVIrregular = false;
+                    }
+
+                    const R = snap.fileiras.length;
+                    const dGlobalMedia = snap.fileiras.reduce((s, fil) => s + fil.dBaseMedia, 0) / R;
+
+                    snap.fileiras.forEach((fil, r) => {
+                        const m = fil.length;
+                        let t0 = fil.tBaseMedia;
+                        let passoH = W + (snap.targetH !== null ? snap.targetH : 0);
+                        if (snap.targetH !== null && m >= 2) {
+                            t0 = fil.tBaseMedia - ((m - 1) / 2) * passoH;
+                        }
+
+                        let deltaD = 0;
+                        if (snap.targetV !== null && R >= 2) {
+                            const passoV = D + snap.targetV;
+                            const d0 = dGlobalMedia - ((R - 1) / 2) * passoV;
+                            const dRowTarget = d0 + r * passoV;
+                            deltaD = dRowTarget - fil.dBaseMedia;
+                        }
+
+                        fil.forEach((it, k) => {
+                            const tTarget = (snap.targetH !== null && m >= 2) ? (t0 + k * passoH) : it.t;
+                            const deltaT = tTarget - it.t;
+
+                            const dx = deltaT * snap.ux + deltaD * snap.nx;
+                            const dy = deltaT * snap.uy + deltaD * snap.ny;
+                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
+
+                            const f = it.f;
+                            f.properties._anelUni = novoAnel;
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [novoAnel];
+                                f.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(it.id);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                            const cLL = centroide(novoAnel);
+                            E.ajustes[it.id] = {
+                                lng: Number(cLL[0].toFixed(7)),
+                                lat: Number(cLL[1].toFixed(7)),
+                                rot_deg: it.rotBase,
+                                grupo_id: obterIdGrupo(it.id),
+                                coords: novoAnel
+                            };
+                        });
+                    });
+
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao(true);
+                    desenharNumeracaoCasas();
+                    st(`Espaçamento ${eixo === "h" ? "horizontal" : "vertical"} ajustado para <b>${valorAlvo.toFixed(1).replace(".", ",")}m</b>.`);
+                }
+
+                // ============ Auditoria de Espaçamento via Console ============
+                window.verificarEspacamento = function(paramH, paramV) {
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) {
+                        console.warn("[verificarEspacamento] Selecione ao menos 2 casas.");
+                        return null;
+                    }
+
+                    const snap = prepararSnapshotEspacamento();
+                    if (!snap) return null;
+
+                    const targetH = (paramH !== undefined) ? Number(paramH) : (snap.targetH !== null ? snap.targetH : snap.espHAtual);
+                    const targetV = (paramV !== undefined) ? Number(paramV) : (snap.targetV !== null ? snap.targetV : snap.espVAtual);
+
+                    console.log(`%c[verificarEspacamento] Verificando ${feats.length} casas selecionadas. Alvo H: ${targetH}m | Alvo V: ${targetV}m`, "font-weight:bold;color:#0284c7;");
+                    console.log(`Fileiras detectadas: ${snap.fileiras.length}`);
+
+                    let totalDesviosH = 0;
+                    const relatorioFileiras = [];
+
+                    snap.fileiras.forEach((fil, r) => {
+                        const espacos = [];
+                        let desviosFil = 0;
+                        for (let k = 0; k < fil.length - 1; k++) {
+                            const p1 = centroideMetrosLote(fil[k].f.properties._anelUni);
+                            const p2 = centroideMetrosLote(fil[k + 1].f.properties._anelUni);
+                            const distBordas = ((p2.x - p1.x) * snap.ux + (p2.y - p1.y) * snap.uy) - PADRAO_LARGURA_M;
+                            const erro = Math.abs(distBordas - targetH);
+                            if (erro > 0.05) {
+                                totalDesviosH++;
+                                desviosFil++;
+                            }
+                            espacos.push({
+                                de: fil[k].f.properties.numero || fil[k].id,
+                                para: fil[k + 1].f.properties.numero || fil[k + 1].id,
+                                distM: Number(distBordas.toFixed(3)),
+                                desvio: Number(erro.toFixed(3))
+                            });
+                        }
+                        relatorioFileiras.push({
+                            fileira: r + 1,
+                            totalCasas: fil.length,
+                            casas: fil.map((it) => it.f.properties.numero || it.id),
+                            espacos,
+                            desviosH: desviosFil
+                        });
+                        console.log(`  Fileira ${r + 1} (${fil.length} casas):`, espacos.map((e) => `${e.de}->${e.para}: ${e.distM}m`).join(", "));
+                    });
+
+                    let totalDesviosV = 0;
+                    const espacosV = [];
+                    if (snap.fileiras.length >= 2) {
+                        for (let r = 0; r < snap.fileiras.length - 1; r++) {
+                            const fil1 = snap.fileiras[r];
+                            const fil2 = snap.fileiras[r + 1];
+                            const d1 = fil1.reduce((s, it) => {
+                                const p = centroideMetrosLote(it.f.properties._anelUni);
+                                return s + ((p.x - snap.centroMetros.x) * snap.nx + (p.y - snap.centroMetros.y) * snap.ny);
+                            }, 0) / fil1.length;
+                            const d2 = fil2.reduce((s, it) => {
+                                const p = centroideMetrosLote(it.f.properties._anelUni);
+                                return s + ((p.x - snap.centroMetros.x) * snap.nx + (p.y - snap.centroMetros.y) * snap.ny);
+                            }, 0) / fil2.length;
+                            const distBordasV = (d2 - d1) - PADRAO_PROFUNDIDADE_M;
+                            const erro = Math.abs(distBordasV - targetV);
+                            if (erro > 0.05) totalDesviosV++;
+                            espacosV.push({
+                                fileiraA: r + 1,
+                                fileiraB: r + 2,
+                                distM: Number(distBordasV.toFixed(3)),
+                                desvio: Number(erro.toFixed(3))
+                            });
+                            console.log(`  Espaçamento V entre fileiras ${r + 1} e ${r + 2}: ${distBordasV.toFixed(3)}m (alvo: ${targetV}m, erro: ${erro.toFixed(3)}m)`);
+                        }
+                    }
+
+                    console.log(`%c[verificarEspacamento] Desvios H > 0.05m = ${totalDesviosH} | Desvios V > 0.05m = ${totalDesviosV}`, totalDesviosH === 0 && totalDesviosV === 0 ? "color:green;font-weight:bold;" : "color:red;font-weight:bold;");
+                    return {
+                        totalCasas: feats.length,
+                        fileiras: relatorioFileiras,
+                        espacosV,
+                        totalDesviosH,
+                        totalDesviosV,
+                        valido: (totalDesviosH === 0 && totalDesviosV === 0)
+                    };
+                };
+
+                // ============ Sistema Unificado de Pré-visualização ============
+                let previewAcaoAtiva = null;
+
+                function iniciarPreviewAcao(calc) {
+                    if (!calc) return;
+                    previewAcaoAtiva = calc;
+                    previewQuarteiraoAtivo = calc;
+                    cPreviewOverlay.clearLayers();
+
+                    for (const [id, ajust] of calc.resultadoAjustes) {
+                        const pts = ajust.coords.map((c) => [c[1], c[0]]);
+                        const poly = L.polygon(pts, {
+                            color: "#ff7700",
+                            weight: 2.2,
+                            dashArray: "5 4",
+                            fillColor: "#ff9900",
+                            fillOpacity: 0.55,
+                            interactive: false
+                        });
+                        cPreviewOverlay.addLayer(poly);
+                    }
+
+                    const banner = $("bannerPreviewQuarteirao");
+                    if (banner) {
+                        banner.style.display = "flex";
+                        const txt = $("previewQuarteiraoTexto");
+                        if (txt) {
+                            txt.innerHTML = `<b>${calc.titulo || "Pré-visualização"}</b>`;
+                        }
+                    }
+                    st("<b>Pré-visualização gerada.</b> Confirme para aplicar as alterações ou cancele.");
+                }
+
+                function confirmarPreviewAcao() {
+                    if (!previewAcaoAtiva) return;
+                    salvarSnapshotHistorico();
+
+                    const calc = previewAcaoAtiva;
+                    const ids = Array.from(calc.resultadoAjustes.keys());
+
+                    if (calc.tipo === "quarteirao") {
+                        const novoGrpId = "quarteirao-" + Date.now();
+                        E.grupos = E.grupos
+                            .map((g) => ({
+                                id: g.id || ("grp-" + (g.casas ? g.casas[0] : "")),
+                                tipo: g.tipo || "grupo",
+                                casas: (g.casas || g).filter((id) => !calc.resultadoAjustes.has(id))
+                            }))
+                            .filter((g) => g.casas.length >= 2);
+
+                        E.grupos.push({
+                            id: novoGrpId,
+                            tipo: "quarteirao",
+                            casas: ids
+                        });
+                        for (const [id, ajust] of calc.resultadoAjustes) {
+                            ajust.grupo_id = novoGrpId;
+                        }
+                    }
+
+                    for (const [id, ajust] of calc.resultadoAjustes) {
+                        const item = mapaCasasPorId.get(id);
+                        if (item) {
+                            item.properties._anelUni = ajust.coords;
+                            if (E.posicao === "uniforme") {
+                                item.geometry.coordinates = [ajust.coords];
+                                item.properties._c = [ajust.lng, ajust.lat];
+                                const layer = mapaCamadasCasas.get(id);
+                                if (layer) {
+                                    layer.setLatLngs(ajust.coords.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                        E.ajustes[id] = {
+                            lng: ajust.lng,
+                            lat: ajust.lat,
+                            rot_deg: ajust.rot_deg,
+                            grupo_id: ajust.grupo_id || obterIdGrupo(id),
+                            coords: ajust.coords
+                        };
+                    }
+
+                    const descAcao = calc.tipo === "quarteirao"
+                        ? `${ids.length} casas agrupadas em 2 fileiras paralelas`
+                        : (calc.tipo === "linha" ? `${ids.length} casas alinhadas em linha horizontal` : `${ids.length} casas niveladas na horizontal`);
+
+                    cancelarPreviewAcao();
+                    invalidarSnapshotEspacamento();
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    desenharNumeracaoCasas();
+                    st(`<b>Ação confirmada:</b> ${descAcao}.`);
+                }
+
+                function cancelarPreviewAcao() {
+                    previewAcaoAtiva = null;
+                    previewQuarteiraoAtivo = null;
+                    cPreviewOverlay.clearLayers();
+                    const banner = $("bannerPreviewQuarteirao");
+                    if (banner) banner.style.display = "none";
+                }
+
+                function iniciarNivelarHorizontal() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularNivelamentoHorizontal(E.selecionadas);
+                    if (!calc) return;
+                    iniciarPreviewAcao(calc);
+                }
+
+                function iniciarAlinharLinha() {
+                    if (E.selecionadas.size < 2) return;
+                    const calc = calcularAlinhamentoLinha(E.selecionadas);
+                    if (!calc) return;
+                    iniciarPreviewAcao(calc);
+                }
+
+                // ============ Movimentação e Rotação ============
+                function moverCasasSelecionadas(dx, dy) {
+                    if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
+                    for (const id of E.selecionadas) {
+                        const f = mapaCasasPorId.get(id);
+                        if (!f) continue;
+                        const anelAtual = f.properties._anelUni;
+                        const novoAnel = aplicarTranslacaoMetros(anelAtual, dx, dy);
+                        f.properties._anelUni = novoAnel;
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [novoAnel];
+                            f.properties._c = centroide(novoAnel);
+                            const layer = mapaCamadasCasas.get(id);
+                            if (layer) {
+                                layer.setLatLngs(novoAnel.map((c) => [c[1], c[0]]));
+                                layer.redraw();
+                            }
+                        }
+                        const cLL = centroide(novoAnel);
+                        if (!E.ajustes[id]) {
+                            E.ajustes[id] = { lng: cLL[0], lat: cLL[1], rot_deg: 0, grupo_id: obterIdGrupo(id), coords: novoAnel };
+                        }
+                        E.ajustes[id].lng = Number(cLL[0].toFixed(7));
+                        E.ajustes[id].lat = Number(cLL[1].toFixed(7));
+                        E.ajustes[id].coords = novoAnel;
+                    }
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                }
+
+                function rotacionarCasasSelecionadas(graus) {
+                    if (E.selecionadas.size === 0 || !graus) return;
+                    invalidarSnapshotEspacamento();
+                    salvarSnapshotHistorico();
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (!feats.length) return;
+                    const centroM = calcularCentroideMetros(feats);
+                    const rad = (graus * Math.PI) / 180;
+                    for (const f of feats) {
+                        const id = f.properties.id;
+                        const anelAtual = f.properties._anelUni;
+                        const novoAnel = aplicarRotacaoMetros(anelAtual, centroM, rad);
+                        f.properties._anelUni = novoAnel;
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [novoAnel];
+                            f.properties._c = centroide(novoAnel);
+                            const layer = mapaCamadasCasas.get(id);
+                            if (layer) {
+                                layer.setLatLngs(novoAnel.map((c) => [c[1], c[0]]));
+                                layer.redraw();
+                            }
+                        }
+                        const cLL = centroide(novoAnel);
+                        const prevRot = (E.ajustes[id] && E.ajustes[id].rot_deg) || 0;
+                        if (!E.ajustes[id]) {
+                            E.ajustes[id] = { lng: cLL[0], lat: cLL[1], rot_deg: 0, grupo_id: obterIdGrupo(id), coords: novoAnel };
+                        }
+                        E.ajustes[id].rot_deg = Number((prevRot + graus).toFixed(2));
+                        E.ajustes[id].lng = Number(cLL[0].toFixed(7));
+                        E.ajustes[id].lat = Number(cLL[1].toFixed(7));
+                        E.ajustes[id].coords = novoAnel;
+                    }
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st(`Seleção rotacionada em <b>${graus > 0 ? "+" : ""}${graus}°</b>.`);
+                }
+
+                // ============ Restauração ============
+                function restaurarSelecionadas() {
+                    if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
+                    salvarSnapshotHistorico();
+                    for (const id of E.selecionadas) {
+                        delete E.ajustes[id];
+                        const f = mapaCasasPorId.get(id);
+                        if (f) {
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [f.properties._anelUni];
+                                f.properties._c = centroide(f.properties._anelUni);
+                                const layer = mapaCamadasCasas.get(id);
+                                if (layer) {
+                                    layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                    }
+                    desagrupar();
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st("Casas selecionadas restauradas para o padrão geométrico original.");
+                }
+
+                function restaurarQuarteiraoSelecionado() {
+                    if (E.selecionadas.size === 0) return;
+                    salvarSnapshotHistorico();
+
+                    const grpsParaRemover = new Set();
+                    const casasParaRestaurar = new Set();
+
+                    for (const id of E.selecionadas) {
+                        const g = obterGrupo(id);
+                        if (g) {
+                            grpsParaRemover.add(g.id);
+                            for (const cid of (g.casas || g)) casasParaRestaurar.add(cid);
+                        } else {
+                            casasParaRestaurar.add(id);
+                        }
+                    }
+
+                    for (const id of casasParaRestaurar) {
+                        delete E.ajustes[id];
+                        const f = mapaCasasPorId.get(id);
+                        if (f) {
+                            f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [f.properties._anelUni];
+                                f.properties._c = centroide(f.properties._anelUni);
+                                const layer = mapaCamadasCasas.get(id);
+                                if (layer) {
+                                    layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                    }
+
+                    E.grupos = E.grupos.filter((g) => !grpsParaRemover.has(g.id));
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st(`<b>${casasParaRestaurar.size}</b> casas do quarteirão restauradas ao padrão original.`);
+                }
+
+                function restaurarTodas() {
+                    if (!confirm("Restaurar todas as casas para o padrão original? Esta ação remove todas as edições manuais.")) return;
+                    salvarSnapshotHistorico();
+                    E.ajustes = {};
+                    E.grupos = [];
+                    for (const f of E.casas) {
+                        f.properties._anelUni = JSON.parse(JSON.stringify(f.properties._anelUniBase));
+                        if (E.posicao === "uniforme") {
+                            f.geometry.coordinates = [f.properties._anelUni];
+                            f.properties._c = centroide(f.properties._anelUni);
+                            const layer = mapaCamadasCasas.get(f.properties.id);
+                            if (layer) {
+                                layer.setLatLngs(f.properties._anelUni.map((c) => [c[1], c[0]]));
+                                layer.redraw();
+                            }
+                        }
+                    }
+                    E.selecionadas.clear();
+                    marcarSalvo(false);
+                    salvarLocalStorage();
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    st("Todas as casas foram restauradas ao padrão original.");
+                }
+
+                // ============ Persistência ============
+                const LOCAL_STORAGE_KEY = "sig_salvacao_casas_ajustadas_v1";
+
+                function salvarLocalStorage() {
+                    try {
+                        const payload = {
+                            versao: 1,
+                            data_modificacao: new Date().toISOString(),
+                            descricao: "Ajustes manuais de posição e rotação das casas (Residencial Salvação, Santarém/PA)",
+                            parametros_padronizacao: {
+                                largura_m: PADRAO_LARGURA_M,
+                                profundidade_m: PADRAO_PROFUNDIDADE_M,
+                                espacamento_lotes_m: PADRAO_ESPACAMENTO_M,
+                                intervalo_fileiras_m: PADRAO_INTERVALO_FILEIRAS_M,
+                            },
+                            total_ajustadas: Object.keys(E.ajustes).length,
+                            grupos: E.grupos,
+                            ajustes: E.ajustes,
+                        };
+                        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+                    } catch (e) {
+                        console.warn("Erro ao salvar no localStorage:", e);
+                    }
+                }
+
+                function marcarSalvo(isSalvo) {
+                    E.alteracoesSalvas = isSalvo;
+                    const badge = $("badgeSalvo");
+                    if (badge) {
+                        if (isSalvo) {
+                            badge.className = "badge-salvo";
+                            badge.textContent = "✓ Salvo";
+                        } else {
+                            badge.className = "badge-salvo pendente";
+                            badge.textContent = "● Alterações não salvas";
+                        }
+                    }
+                }
+
+                function baixarArquivo(conteudo, nomeArquivo, tipoMime) {
+                    const blob = new Blob([conteudo], { type: tipoMime });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = nomeArquivo;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+
+                async function salvarArquivoAjustes() {
+                    const payload = {
+                        versao: 1,
+                        data_modificacao: new Date().toISOString(),
+                        descricao: "Ajustes manuais de posição e rotação das casas (Residencial Salvação, Santarém/PA)",
+                        parametros_padronizacao: {
+                            largura_m: PADRAO_LARGURA_M,
+                            profundidade_m: PADRAO_PROFUNDIDADE_M,
+                            espacamento_lotes_m: PADRAO_ESPACAMENTO_M,
+                            intervalo_fileiras_m: PADRAO_INTERVALO_FILEIRAS_M,
+                        },
+                        total_ajustadas: Object.keys(E.ajustes).length,
+                        grupos: E.grupos,
+                        ajustes: E.ajustes,
+                    };
+                    const jsonStr = JSON.stringify(payload, null, 2);
+                    let gravou = false;
+
+                    if (window.showSaveFilePicker) {
+                        try {
+                            const handle = await window.showSaveFilePicker({
+                                suggestedName: "casas_ajustadas.json",
+                                types: [
+                                    {
+                                        description: "Arquivo JSON de Ajustes",
+                                        accept: { "application/json": [".json"] },
+                                    },
+                                ],
+                            });
+                            const writable = await handle.createWritable();
+                            await writable.write(jsonStr);
+                            await writable.close();
+                            gravou = true;
+                            st("Arquivo <b>casas_ajustadas.json</b> gravado com sucesso no disco!");
+                        } catch (err) {
+                            if (err.name === "AbortError") return;
+                            console.warn("showSaveFilePicker falhou, usando download:", err);
+                        }
+                    }
+
+                    if (!gravou) {
+                        baixarArquivo(jsonStr, "casas_ajustadas.json", "application/json");
+                        st("Arquivo <b>casas_ajustadas.json</b> baixado. Coloque-o na pasta <b>dados/</b> do repositório para versionar no Git.");
+                    }
+                    marcarSalvo(true);
+                }
+
+                function exportarGeoJsonAjustado() {
+                    const featuresCasas = E.casas.map((f) => {
+                        const props = {};
+                        for (const [k, v] of Object.entries(f.properties)) {
+                            if (!k.startsWith("_") && k !== "indicadores_mock") {
+                                props[k] = v;
+                            }
+                        }
+                        return {
+                            type: "Feature",
+                            properties: props,
+                            geometry: {
+                                type: "Polygon",
+                                coordinates: [f.properties._anelUni],
+                            },
+                        };
+                    });
+
+                    const featuresOutros = E.outros.map((f) => {
+                        const props = {};
+                        for (const [k, v] of Object.entries(f.properties)) {
+                            if (!k.startsWith("_")) props[k] = v;
+                        }
+                        return {
+                            type: "Feature",
+                            properties: props,
+                            geometry: f.geometry,
+                        };
+                    });
+
+                    const geojson = {
+                        type: "FeatureCollection",
+                        features: [...featuresCasas, ...featuresOutros],
+                    };
+
+                    baixarArquivo(JSON.stringify(geojson, null, 2), "casas_salvacao_ajustado.geojson", "application/geo+json");
+                    st("GeoJSON exportado como <b>casas_salvacao_ajustado.geojson</b> com atributos do IBGE preservados.");
+                }
+
+                function carregarAjustesIniciais() {
+                    let localData = null;
+                    try {
+                        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+                        if (raw) localData = JSON.parse(raw);
+                    } catch (e) {
+                        console.warn("Erro no localStorage:", e);
+                    }
+
+                    fetch("dados/casas_ajustadas.json")
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((servidorData) => {
+                            let escolhido = servidorData;
+                            if (localData && servidorData) {
+                                const tLocal = new Date(localData.data_modificacao || 0).getTime();
+                                const tServ = new Date(servidorData.data_modificacao || 0).getTime();
+                                escolhido = tLocal >= tServ ? localData : servidorData;
+                            } else if (localData) {
+                                chosen: escolhido = localData;
+                            }
+
+                            if (escolhido && (Object.keys(escolhido.ajustes || {}).length > 0 || (escolhido.grupos || []).length > 0)) {
+                                aplicarSnapshot(escolhido);
+                                st(`Padrão ajustado carregado: <b>${Object.keys(escolhido.ajustes || {}).length}</b> casas com ajustes.`);
+                            }
+                        })
+                        .catch(() => {
+                            if (localData) aplicarSnapshot(localData);
+                        });
+                }
+
+                // ============ Interações e Seleção ============
+                function aoClicarCasaModoEdicao(f, e) {
+                    const id = f.properties.id;
+                    const shift = e.originalEvent && (e.originalEvent.shiftKey || e.originalEvent.ctrlKey);
+                    if (shift) {
+                        const grupo = obterGrupo(id);
+                        const membros = (grupo && grupo.casas) ? grupo.casas : [id];
+                        const todosMarcados = membros.every((m) => E.selecionadas.has(m));
+                        if (todosMarcados) {
+                            membros.forEach((m) => E.selecionadas.delete(m));
+                        } else {
+                            membros.forEach((m) => E.selecionadas.add(m));
+                        }
+                    } else {
+                        const grupo = obterGrupo(id);
+                        if (grupo && grupo.casas) {
+                            E.selecionadas = new Set(grupo.casas);
+                        } else {
+                            E.selecionadas = new Set([id]);
+                        }
+                    }
+                    atualizarSelecao();
+                }
+
+                let arrastoEmAndamento = false;
+                let arrastoStartPos = null;
+                let arrastoStartCoords = new Map();
+
+                function aoMousedownCasaModoEdicao(f, e) {
+                    if (e.originalEvent.button !== 0) return;
+                    const id = f.properties.id;
+                    const shift = e.originalEvent.shiftKey || e.originalEvent.ctrlKey;
+                    if (!E.selecionadas.has(id)) {
+                        if (shift) {
+                            const grupo = obterGrupo(id);
+                            const membros = (grupo && grupo.casas) ? grupo.casas : [id];
+                            membros.forEach((m) => E.selecionadas.add(m));
+                        } else {
+                            const grupo = obterGrupo(id);
+                            E.selecionadas = new Set((grupo && grupo.casas) ? grupo.casas : [id]);
+                        }
+                        atualizarSelecao();
+                    }
+
+                    arrastoEmAndamento = true;
+                    arrastoStartPos = e.latlng;
+                    arrastoStartCoords = new Map();
+                    for (const selId of E.selecionadas) {
+                        const item = mapaCasasPorId.get(selId);
+                        if (item) {
+                            arrastoStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelUni)));
+                        }
+                    }
+                }
+
+                let rotacionandoEmAndamento = false;
+                let rotStartAngle = 0;
+                let rotCentroMeters = null;
+                let rotStartCoords = new Map();
+                let rotDeltaDeg = 0;
+
+                function atualizarOverlayEdicao() {
+                    cSelecaoOverlay.clearLayers();
+                    const barra = $("barraFlutuanteSelecao");
+                    if (!E.modoEdicao || E.selecionadas.size === 0) {
+                        if (barra) barra.style.display = "none";
+                        return;
+                    }
+
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (!feats.length) {
+                        if (barra) barra.style.display = "none";
+                        return;
+                    }
+
+                    const latlngsTotais = [];
+                    for (const f of feats) {
+                        const pts = f.properties._anelUni.map((c) => [c[1], c[0]]);
+                        latlngsTotais.push(...pts);
+                        const selPoly = L.polygon(pts, {
+                            color: "#00d2ff",
+                            weight: 2.5,
+                            dashArray: "4 3",
+                            fillColor: "#00d2ff",
+                            fillOpacity: 0.35,
+                            interactive: true,
+                        });
+                        selPoly.on("mousedown", (e) => {
+                            if (e.originalEvent.button === 0 && E.ferramentaEdicao === "selecionar") {
+                                L.DomEvent.stopPropagation(e);
+                                aoMousedownCasaModoEdicao(f, e);
+                            }
+                        });
+                        cSelecaoOverlay.addLayer(selPoly);
+                    }
+
+                    const bounds = L.latLngBounds(latlngsTotais);
+                    const centroLatLng = bounds.getCenter();
+                    const northPoint = L.latLng(bounds.getNorth(), centroLatLng.lng);
+
+                    // Alça de rotação acima do topo da seleção
+                    const topScreen = map.latLngToContainerPoint(northPoint);
+                    const handleScreen = L.point(topScreen.x, topScreen.y - 32);
+                    const handleLatLng = map.containerPointToLatLng(handleScreen);
+
+                    const hasteRotacao = L.polyline([northPoint, handleLatLng], {
+                        color: "#00d2ff",
+                        weight: 1.8,
+                        dashArray: "3 3",
+                        interactive: false,
+                    });
+                    cSelecaoOverlay.addLayer(hasteRotacao);
+
+                    const alcaIcon = L.divIcon({
+                        className: "",
+                        html: '<div class="alca-rotacao-icone" title="Arraste para girar em torno do centro">↻</div>',
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12],
+                    });
+                    const alcaMarker = L.marker(handleLatLng, {
+                        icon: alcaIcon,
+                        interactive: true,
+                    });
+                    alcaMarker.on("mousedown", (e) => {
+                        if (e.originalEvent.button !== 0) return;
+                        L.DomEvent.stopPropagation(e);
+                        rotacionandoEmAndamento = true;
+                        rotCentroMeters = calcularCentroideMetros(feats);
+                        const centerScreen = map.latLngToContainerPoint(centroLatLng);
+                        rotStartAngle = Math.atan2(e.originalEvent.clientY - centerScreen.y, e.originalEvent.clientX - centerScreen.x);
+                        rotStartCoords = new Map();
+                        rotDeltaDeg = 0;
+                        for (const selId of E.selecionadas) {
+                            const item = mapaCasasPorId.get(selId);
+                            if (item) {
+                                rotStartCoords.set(selId, JSON.parse(JSON.stringify(item.properties._anelUni)));
+                            }
+                        }
+                    });
+                    cSelecaoOverlay.addLayer(alcaMarker);
+
+                    // Atualiza a barra flutuante de ações rápidas sobre a seleção
+                    if (barra) {
+                        barra.style.display = "flex";
+                        const barraScreen = L.point(handleScreen.x, handleScreen.y - 18);
+                        barra.style.left = barraScreen.x + "px";
+                        barra.style.top = barraScreen.y + "px";
+
+                        const podeAgrupar = E.selecionadas.size >= 2;
+                        const algumEmGrupo = Array.from(E.selecionadas).some((id) => obterGrupo(id));
+
+                        if (!snapshotBaseEspacamento && podeAgrupar) {
+                            prepararSnapshotEspacamento();
+                        }
+                        const valHStr = snapshotBaseEspacamento
+                            ? formatarValorEspacamento(
+                                snapshotBaseEspacamento.targetH !== null ? snapshotBaseEspacamento.targetH : snapshotBaseEspacamento.espHAtual,
+                                snapshotBaseEspacamento.espHIrregular
+                              )
+                            : "1,0";
+                        const valVStr = snapshotBaseEspacamento
+                            ? formatarValorEspacamento(
+                                snapshotBaseEspacamento.targetV !== null ? snapshotBaseEspacamento.targetV : snapshotBaseEspacamento.espVAtual,
+                                snapshotBaseEspacamento.espVIrregular
+                              )
+                            : "0,0";
+
+                        const titleH = (snapshotBaseEspacamento && snapshotBaseEspacamento.espHIrregular)
+                            ? "espaçamentos irregulares; ao aplicar, serão uniformizados"
+                            : "Espaçamento horizontal uniforme entre as bordas dos lotes (em metros)";
+                        const titleV = (snapshotBaseEspacamento && snapshotBaseEspacamento.espVIrregular)
+                            ? "espaçamentos irregulares; ao aplicar, serão uniformizados"
+                            : "Espaçamento vertical uniforme entre as bordas das fileiras (em metros)";
+                        const classH = (snapshotBaseEspacamento && snapshotBaseEspacamento.espHIrregular) ? "input-irregular" : "";
+                        const classV = (snapshotBaseEspacamento && snapshotBaseEspacamento.espVIrregular) ? "input-irregular" : "";
+
+                        barra.innerHTML = `
+                            <b>${E.selecionadas.size} casa(s)</b>
+                            ${podeAgrupar ? '<button class="btn" id="btnFlutuanteAgrupar" title="Agrupar casas selecionadas">🔗 Agrupar</button>' : ""}
+                            ${podeAgrupar ? '<button class="btn" id="btnFlutuanteQuarteirao" title="Organizar seleção em quarteirão padronizado">🏘️ Agrupar em quarteirão</button>' : ""}
+                            ${algumEmGrupo ? '<button class="btn" id="btnFlutuanteDesagrupar" title="Desagrupar casas selecionadas">⛓️‍💥 Desagrupar</button>' : ""}
+                            ${podeAgrupar ? `
+                                <span class="divisor-flutuante"></span>
+                                <div class="grupo-input-flutuante" title="${titleH}">
+                                    <span>↔ H:</span>
+                                    <button class="btn-micro" id="btnFlutuanteEspHMenos" title="Diminuir espaçamento horizontal (0,1m)">-</button>
+                                    <input type="text" id="inputFlutuanteEspH" class="${classH}" value="${valHStr}" title="${titleH}" style="width:48px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspHMais" title="Aumentar espaçamento horizontal (0,1m)">+</button>
+                                    <span>m</span>
+                                </div>
+                                <span class="divisor-flutuante"></span>
+                                <div class="grupo-input-flutuante" title="${titleV}">
+                                    <span>↕ V:</span>
+                                    <button class="btn-micro" id="btnFlutuanteEspVMenos" title="Diminuir espaçamento vertical (0,1m)">-</button>
+                                    <input type="text" id="inputFlutuanteEspV" class="${classV}" value="${valVStr}" title="${titleV}" style="width:48px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspVMais" title="Aumentar espaçamento vertical (0,1m)">+</button>
+                                    <span>m</span>
+                                </div>
+                            ` : ""}
+                            <span class="divisor-flutuante"></span>
+                            <button class="btn" id="btnFlutuanteRotM15" title="Girar -15°">-15°</button>
+                            <button class="btn" id="btnFlutuanteRotP15" title="Girar +15°">+15°</button>
+                            <button class="btn" id="btnFlutuanteRestaurar" title="Restaurar ao padrão original">↺</button>
+                        `;
+
+                        const bAg = $("btnFlutuanteAgrupar");
+                        if (bAg) bAg.onclick = (e) => { e.stopPropagation(); agrupar(); };
+                        const bQuart = $("btnFlutuanteQuarteirao");
+                        if (bQuart) bQuart.onclick = (e) => { e.stopPropagation(); iniciarAgrupamentoQuarteirao(); };
+                        const bDes = $("btnFlutuanteDesagrupar");
+                        if (bDes) bDes.onclick = (e) => { e.stopPropagation(); desagrupar(); };
+
+                        const bHMenos = $("btnFlutuanteEspHMenos");
+                        const bHMais = $("btnFlutuanteEspHMais");
+                        const inH = $("inputFlutuanteEspH");
+                        if (bHMenos) bHMenos.onclick = (e) => {
+                            e.stopPropagation();
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetH !== null ? snap.targetH : snap.espHAtual) : 1.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.max(0, Math.round((baseVal - 0.1) * 10) / 10);
+                            aplicarEspacamentoDeterministo("h", novo);
+                        };
+                        if (bHMais) bHMais.onclick = (e) => {
+                            e.stopPropagation();
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetH !== null ? snap.targetH : snap.espHAtual) : 1.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.min(30, Math.round((baseVal + 0.1) * 10) / 10);
+                            aplicarEspacamentoDeterministo("h", novo);
+                        };
+                        if (inH) {
+                            inH.onclick = (e) => e.stopPropagation();
+                            inH.onkeydown = (e) => {
+                                if (e.key === "Enter") {
+                                    e.target.blur();
+                                }
+                            };
+                            inH.onchange = (e) => {
+                                const val = parseValEspacamento(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                    aplicarEspacamentoDeterministo("h", val);
+                                } else {
+                                    inH.value = snapshotBaseEspacamento
+                                        ? formatarValorEspacamento(
+                                            snapshotBaseEspacamento.targetH !== null ? snapshotBaseEspacamento.targetH : snapshotBaseEspacamento.espHAtual,
+                                            snapshotBaseEspacamento.espHIrregular
+                                          )
+                                        : "1,0";
+                                }
+                            };
+                        }
+
+                        const bVMenos = $("btnFlutuanteEspVMenos");
+                        const bVMais = $("btnFlutuanteEspVMais");
+                        const inV = $("inputFlutuanteEspV");
+                        if (bVMenos) bVMenos.onclick = (e) => {
+                            e.stopPropagation();
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetV !== null ? snap.targetV : snap.espVAtual) : 0.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.max(0, Math.round((baseVal - 0.1) * 10) / 10);
+                            aplicarEspacamentoDeterministo("v", novo);
+                        };
+                        if (bVMais) bVMais.onclick = (e) => {
+                            e.stopPropagation();
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetV !== null ? snap.targetV : snap.espVAtual) : 0.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.min(30, Math.round((baseVal + 0.1) * 10) / 10);
+                            aplicarEspacamentoDeterministo("v", novo);
+                        };
+                        if (inV) {
+                            inV.onclick = (e) => e.stopPropagation();
+                            inV.onkeydown = (e) => {
+                                if (e.key === "Enter") {
+                                    e.target.blur();
+                                }
+                            };
+                            inV.onchange = (e) => {
+                                const val = parseValEspacamento(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                    aplicarEspacamentoDeterministo("v", val);
+                                } else {
+                                    inV.value = snapshotBaseEspacamento
+                                        ? formatarValorEspacamento(
+                                            snapshotBaseEspacamento.targetV !== null ? snapshotBaseEspacamento.targetV : snapshotBaseEspacamento.espVAtual,
+                                            snapshotBaseEspacamento.espVIrregular
+                                          )
+                                        : "0,0";
+                                }
+                            };
+                        }
+
+                        const bM15 = $("btnFlutuanteRotM15");
+                        if (bM15) bM15.onclick = (e) => { e.stopPropagation(); rotacionarCasasSelecionadas(-15); };
+                        const bP15 = $("btnFlutuanteRotP15");
+                        if (bP15) bP15.onclick = (e) => { e.stopPropagation(); rotacionarCasasSelecionadas(15); };
+                        const bRes = $("btnFlutuanteRestaurar");
+                        if (bRes) bRes.onclick = (e) => { e.stopPropagation(); restaurarSelecionadas(); };
+                    }
+                }
+
+                function atualizarSelecao() {
+                    snapshotBaseEspacamento = null;
+                    historicoEspacamentoSalvo = false;
+                    atualizarOverlayEdicao();
+                    atualizarUIEdicao();
+                    pintar();
+                }
+
+                function atualizarUIEdicao() {
+                    const selCount = E.selecionadas.size;
+                    const gruposCount = E.grupos.length;
+                    const edContador = $("edContadorSel");
+                    if (edContador) {
+                        edContador.textContent = `${selCount} casa(s) selecionada(s)`;
+                    }
+                    const edGrupos = $("edContadorGrupos");
+                    if (edGrupos) {
+                        edGrupos.textContent = `${gruposCount} grupo(s)`;
+                    }
+
+                    const bAg = $("btnAgrupar");
+                    if (bAg) bAg.disabled = selCount < 2;
+
+                    const bQuart = $("btnQuarteirao");
+                    if (bQuart) bQuart.disabled = selCount < 2;
+
+                    const bDes = $("btnDesagrupar");
+                    if (bDes) {
+                        const temGrupoNaSel = Array.from(E.selecionadas).some((id) => obterGrupo(id));
+                        bDes.disabled = !temGrupoNaSel;
+                    }
+
+                    const bRestSel = $("btnRestaurarSel");
+                    if (bRestSel) bRestSel.disabled = selCount === 0;
+
+                    const bRestQuart = $("btnRestaurarQuarteirao");
+                    if (bRestQuart) bRestQuart.disabled = selCount === 0;
+
+                    atualizarBotoesHistorico();
+                }
+
+                function alternarModoApp(modo) {
+                    const isEdit = modo === "edit";
+                    E.modoEdicao = isEdit;
+                    document.body.classList.toggle("modo-edicao-ativo", isEdit);
+                    const grpEd = $("grupoEdicao");
+                    if (grpEd) grpEd.style.display = isEdit ? "flex" : "none";
+
+                    if (isEdit) {
+                        if (E.posicao !== "uniforme") {
+                            E.posicao = "uniforme";
+                            [...$("segPos").children].forEach((x) =>
+                                x.setAttribute("aria-pressed", String(x.dataset.v === "uniforme")),
+                            );
+                            aplicarPosicao();
+                            st("<b>Modo Edição ativado.</b> Ajustes permitidos apenas na geometria 'Lotes iguais' (tamanho padronizado).");
+                        } else {
+                            st("<b>Modo Edição ativado.</b> Selecione casas para mover, agrupar ou rotacionar.");
+                        }
+                        if (E.ferramentaEdicao === "selecionar") {
+                            map.dragging.disable();
+                        }
+                        map.closePopup();
+                    } else {
+                        cancelarPreviewQuarteirao();
+                        map.dragging.enable();
+                        E.selecionadas.clear();
+                        atualizarOverlayEdicao();
+                        st("<b>Modo Visualização ativado.</b>");
+                    }
+                    pintar();
+                }
+
+                function alternarFerramentaEdicao(f) {
+                    E.ferramentaEdicao = f;
+                    const mapEl = map.getContainer();
+                    if (f === "pan") {
+                        map.dragging.enable();
+                        mapEl.classList.add("cursor-pan");
+                    } else {
+                        map.dragging.disable();
+                        mapEl.classList.remove("cursor-pan");
+                    }
+                }
+
+                // ============ Eventos de Arrastar, Rotacionar, Pan e Menu de Contexto ============
+                let boxAtiva = false;
+                let boxStartPoint = null;
+                let segurandoEspaco = false;
+                let panMeioAtivo = false;
+                let panMeioStartClient = [0, 0];
+
+                const mapEl = map.getContainer();
+
+                function limparEstadoPanEspaco() {
+                    segurandoEspaco = false;
+                    if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
+                        map.dragging.disable();
+                    }
+                    document.body.classList.remove("cursor-pan-global");
+                    mapEl.classList.remove("cursor-pan");
+                }
+
+                function limparEstadoPanMeio() {
+                    panMeioAtivo = false;
+                    document.body.classList.remove("cursor-pan-global");
+                    mapEl.classList.remove("cursor-pan");
+                }
+
+                function fecharMenuContexto() {
+                    const menu = $("menuContextoMapa");
+                    if (menu) menu.style.display = "none";
+                }
+
+                function abrirMenuContexto(e) {
+                    const menu = $("menuContextoMapa");
+                    if (!menu) return;
+                    const podeAcaoSel = E.selecionadas.size >= 2;
+
+                    menu.innerHTML = `
+                        <button class="item-menu-contexto" id="itemMenuNumCasas">
+                            <span>🔢</span>
+                            <span>${E.numeracaoCasas ? "Desativar numeração das casas" : "Ativar numeração das casas"}</span>
+                        </button>
+                        <div class="divisor-menu-contexto"></div>
+                        <button class="item-menu-contexto" id="itemMenuNivelar" ${!podeAcaoSel ? "disabled" : ""} title="${!podeAcaoSel ? 'Selecione ao menos 2 casas' : 'Gira a seleção como um bloco até a fileira ficar horizontal'}">
+                            <span>📐</span>
+                            <span>Nivelar na horizontal (ajustar rotação)</span>
+                        </button>
+                        <button class="item-menu-contexto" id="itemMenuAlinharLinha" ${!podeAcaoSel ? "disabled" : ""} title="${!podeAcaoSel ? 'Selecione ao menos 2 casas' : 'Reorganiza os polígonos em uma única linha horizontal padronizada'}">
+                            <span>📏</span>
+                            <span>Alinhar em uma linha</span>
+                        </button>
+                    `;
+
+                    menu.style.display = "flex";
+                    const rect = mapEl.getBoundingClientRect();
+                    let x = e.clientX - rect.left;
+                    let y = e.clientY - rect.top;
+
+                    const menuW = 230;
+                    const menuH = 140;
+                    if (x + menuW > rect.width) x = Math.max(10, rect.width - menuW - 10);
+                    if (y + menuH > rect.height) y = Math.max(10, rect.height - menuH - 10);
+
+                    menu.style.left = x + "px";
+                    menu.style.top = y + "px";
+
+                    $("itemMenuNumCasas").onclick = (ev) => {
+                        ev.stopPropagation();
+                        fecharMenuContexto();
+                        alternarNumeracaoCasas();
+                    };
+
+                    const btnNivelar = $("itemMenuNivelar");
+                    if (btnNivelar && podeAcaoSel) {
+                        btnNivelar.onclick = (ev) => {
+                            ev.stopPropagation();
+                            fecharMenuContexto();
+                            iniciarNivelarHorizontal();
+                        };
+                    }
+
+                    const btnLinha = $("itemMenuAlinharLinha");
+                    if (btnLinha && podeAcaoSel) {
+                        btnLinha.onclick = (ev) => {
+                            ev.stopPropagation();
+                            fecharMenuContexto();
+                            iniciarAlinharLinha();
+                        };
+                    }
+                }
+
+                // Previne autoscroll no botão do meio
+                window.addEventListener("auxclick", (e) => {
+                    if (e.button === 1) e.preventDefault();
+                });
+
+                mapEl.addEventListener("mousedown", (e) => {
+                    // Pan com botão do meio (botão 1)
+                    if (e.button === 1) {
+                        e.preventDefault();
+                        panMeioAtivo = true;
+                        panMeioStartClient = [e.clientX, e.clientY];
+                        mapEl.classList.add("cursor-pan");
+                        document.body.classList.add("cursor-pan-global");
+                        fecharMenuContexto();
+                        return;
+                    }
+
+                    // Se estiver com Espaço segurado, não faz seleção
+                    if (segurandoEspaco) {
+                        return;
+                    }
+
+                    // Seleção por retângulo em área vazia (botão esquerdo)
+                    if (E.modoEdicao && E.ferramentaEdicao === "selecionar" && e.button === 0 && !arrastoEmAndamento && !rotacionandoEmAndamento) {
+                        if (e.target.closest(".leaflet-interactive") || e.target.closest(".barra-flutuante-selecao") || e.target.closest(".banner-preview-quarteirao") || e.target.closest(".leaflet-control") || e.target.closest(".menu-contexto")) {
+                            return;
+                        }
+                        boxAtiva = true;
+                        boxStartPoint = map.mouseEventToContainerPoint(e);
+                    }
+                });
+
+                window.addEventListener("mousemove", (e) => {
+                    // Pan com botão do meio
+                    if (panMeioAtivo) {
+                        const dx = e.clientX - panMeioStartClient[0];
+                        const dy = e.clientY - panMeioStartClient[1];
+                        panMeioStartClient = [e.clientX, e.clientY];
+                        map.panBy([-dx, -dy], { animate: false });
+                        return;
+                    }
+
+                    // Se pan por Espaço estiver ativo, ignora hover e seleção
+                    if (segurandoEspaco) {
+                        return;
+                    }
+
+                    // Arrastando casas
+                    if (arrastoEmAndamento && arrastoStartPos) {
+                        const curLatLng = map.mouseEventToLatLng(e);
+                        const pStart = L.CRS.EPSG3857.project(arrastoStartPos);
+                        const pCur = L.CRS.EPSG3857.project(curLatLng);
+                        const dx = pCur.x - pStart.x;
+                        const dy = pCur.y - pStart.y;
+
+                        for (const selId of E.selecionadas) {
+                            const startRing = arrastoStartCoords.get(selId);
+                            if (!startRing) continue;
+                            const novoAnel = aplicarTranslacaoMetros(startRing, dx, dy);
+                            const item = mapaCasasPorId.get(selId);
+                            if (item) {
+                                item.properties._anelUni = novoAnel;
+                                item.geometry.coordinates = [novoAnel];
+                                item.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(selId);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                        atualizarOverlayEdicao();
+                        return;
+                    }
+
+                    // Rotacionando casas
+                    if (rotacionandoEmAndamento && rotCentroMeters) {
+                        const centroLatLng = L.CRS.EPSG3857.unproject(L.point(rotCentroMeters.x, rotCentroMeters.y));
+                        const centerScreen = map.latLngToContainerPoint(centroLatLng);
+                        const curAngle = Math.atan2(e.clientY - centerScreen.y, e.clientX - centerScreen.x);
+                        let deltaRad = curAngle - rotStartAngle;
+
+                        if (e.shiftKey) {
+                            deltaRad = (Math.round(((deltaRad * 180) / Math.PI) / 15) * 15 * Math.PI) / 180;
+                        }
+
+                        rotDeltaDeg = Number(((deltaRad * 180) / Math.PI).toFixed(1));
+                        const rotLbl = $("edRotLabel");
+                        if (rotLbl) rotLbl.textContent = `${rotDeltaDeg > 0 ? "+" : ""}${rotDeltaDeg}°`;
+
+                        for (const selId of E.selecionadas) {
+                            const startRing = rotStartCoords.get(selId);
+                            if (!startRing) continue;
+                            const novoAnel = aplicarRotacaoMetros(startRing, rotCentroMeters, deltaRad);
+                            const item = mapaCasasPorId.get(selId);
+                            if (item) {
+                                item.properties._anelUni = novoAnel;
+                                item.geometry.coordinates = [novoAnel];
+                                item.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(selId);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((c) => [c[1], c[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                        }
+                        atualizarOverlayEdicao();
+                        return;
+                    }
+
+                    // Desenho da caixa de seleção (marquee)
+                    if (boxAtiva && boxStartPoint) {
+                        const curPoint = map.mouseEventToContainerPoint(e);
+                        const x1 = Math.min(boxStartPoint.x, curPoint.x);
+                        const y1 = Math.min(boxStartPoint.y, curPoint.y);
+                        const w = Math.abs(curPoint.x - boxStartPoint.x);
+                        const h = Math.abs(curPoint.y - boxStartPoint.y);
+
+                        if (w > 4 || h > 4) {
+                            const mBox = $("marqueeBox");
+                            if (mBox) {
+                                mBox.style.display = "block";
+                                mBox.style.left = x1 + "px";
+                                mBox.style.top = y1 + "px";
+                                mBox.style.width = w + "px";
+                                mBox.style.height = h + "px";
+                            }
+                        }
+                    }
+                });
+
+                window.addEventListener("mouseup", (e) => {
+                    // Fim do Pan com botão do meio
+                    if (panMeioAtivo && e.button === 1) {
+                        limparEstadoPanMeio();
+                        return;
+                    }
+
+                    // Fim do arrasto de casas
+                    if (arrastoEmAndamento) {
+                        arrastoEmAndamento = false;
+                        if (arrastoStartPos) {
+                            const curLatLng = map.mouseEventToLatLng(e);
+                            const pStart = L.CRS.EPSG3857.project(arrastoStartPos);
+                            const pCur = L.CRS.EPSG3857.project(curLatLng);
+                            const dx = pCur.x - pStart.x;
+                            const dy = pCur.y - pStart.y;
+                            if (Math.hypot(dx, dy) > 0.3) {
+                                salvarSnapshotHistorico();
+                                for (const selId of E.selecionadas) {
+                                    const item = mapaCasasPorId.get(selId);
+                                    if (item) {
+                                        const cLL = centroide(item.properties._anelUni);
+                                        const prevRot = (E.ajustes[selId] && E.ajustes[selId].rot_deg) || 0;
+                                        E.ajustes[selId] = {
+                                            lng: Number(cLL[0].toFixed(7)),
+                                            lat: Number(cLL[1].toFixed(7)),
+                                            rot_deg: prevRot,
+                                            grupo_id: obterIdGrupo(selId),
+                                            coords: item.properties._anelUni
+                                        };
+                                    }
+                                }
+                                marcarSalvo(false);
+                                salvarLocalStorage();
+                                atualizarUIEdicao();
+                                desenharNumeracaoCasas();
+                                st("Casas reposicionadas com sucesso.");
+                            }
+                        }
+                        arrastoStartPos = null;
+                        invalidarSnapshotEspacamento();
+                        atualizarOverlayEdicao();
+                    }
+
+                    // Fim da rotação
+                    if (rotacionandoEmAndamento) {
+                        rotacionandoEmAndamento = false;
+                        if (Math.abs(rotDeltaDeg) > 0.1) {
+                            salvarSnapshotHistorico();
+                            for (const selId of E.selecionadas) {
+                                const item = mapaCasasPorId.get(selId);
+                                if (item) {
+                                    const cLL = centroide(item.properties._anelUni);
+                                    const prevRot = (E.ajustes[selId] && E.ajustes[selId].rot_deg) || 0;
+                                    E.ajustes[selId] = {
+                                        lng: Number(cLL[0].toFixed(7)),
+                                        lat: Number(cLL[1].toFixed(7)),
+                                        rot_deg: Number((prevRot + rotDeltaDeg).toFixed(2)),
+                                        grupo_id: obterIdGrupo(selId),
+                                        coords: item.properties._anelUni
+                                    };
+                                }
+                            }
+                            marcarSalvo(false);
+                            salvarLocalStorage();
+                            atualizarUIEdicao();
+                            desenharNumeracaoCasas();
+                            st(`Seleção rotacionada em <b>${rotDeltaDeg > 0 ? "+" : ""}${rotDeltaDeg}°</b>.`);
+                        }
+                        rotDeltaDeg = 0;
+                        rotCentroMeters = null;
+                        invalidarSnapshotEspacamento();
+                        atualizarOverlayEdicao();
+                    }
+
+                    // Fim da caixa de seleção (marquee)
+                    if (boxAtiva) {
+                        boxAtiva = false;
+                        const mBox = $("marqueeBox");
+                        if (mBox && mBox.style.display === "block") {
+                            mBox.style.display = "none";
+                            const curPoint = map.mouseEventToContainerPoint(e);
+                            const x1 = Math.min(boxStartPoint.x, curPoint.x);
+                            const y1 = Math.min(boxStartPoint.y, curPoint.y);
+                            const w = Math.abs(curPoint.x - boxStartPoint.x);
+                            const h = Math.abs(curPoint.y - boxStartPoint.y);
+
+                            const b1 = map.containerPointToLatLng([x1, y1]);
+                            const b2 = map.containerPointToLatLng([x1 + w, y1 + h]);
+                            const rectBounds = L.latLngBounds(b1, b2);
+
+                            const shift = e.shiftKey || e.ctrlKey;
+                            const novasSel = new Set(shift ? E.selecionadas : []);
+
+                            for (const f of E.casas) {
+                                const anel = f.properties._anelUni;
+                                const fBounds = L.latLngBounds(anel.map((p) => [p[1], p[0]]));
+                                if (rectBounds.intersects(fBounds)) {
+                                    novasSel.add(f.properties.id);
+                                }
+                            }
+                            E.selecionadas = expandirGrupos(novasSel);
+                            atualizarSelecao();
+                        } else if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
+                            // Clique simples em área vazia limpa seleção
+                            if (!e.target.closest(".leaflet-interactive") && !e.target.closest(".barra-flutuante-selecao") && !e.target.closest(".banner-preview-quarteirao") && !e.target.closest(".leaflet-control") && !e.target.closest(".menu-contexto")) {
+                                if (E.selecionadas.size > 0) {
+                                    E.selecionadas.clear();
+                                    atualizarSelecao();
+                                }
+                            }
+                        }
+                        boxStartPoint = null;
+                    }
+                });
+
+                // Menu de contexto com botão direito
+                mapEl.addEventListener("contextmenu", (e) => {
+                    e.preventDefault();
+                    if (segurandoEspaco || panMeioAtivo) return;
+                    abrirMenuContexto(e);
+                });
+
+                window.addEventListener("click", (e) => {
+                    if (!e.target.closest("#menuContextoMapa")) {
+                        fecharMenuContexto();
+                    }
+                });
+
+                window.addEventListener("blur", () => {
+                    limparEstadoPanEspaco();
+                    limparEstadoPanMeio();
+                    fecharMenuContexto();
+                });
+
+                document.addEventListener("visibilitychange", () => {
+                    if (document.hidden) {
+                        limparEstadoPanEspaco();
+                        limparEstadoPanMeio();
+                        fecharMenuContexto();
+                    }
+                });
+
+                mapEl.addEventListener("mouseleave", () => {
+                    limparEstadoPanEspaco();
+                    limparEstadoPanMeio();
+                });
+
+                // Atalhos de teclado
+                document.addEventListener("keydown", (e) => {
+                    if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+                        e.preventDefault();
+                        if (e.shiftKey) refazer();
+                        else desfazer();
+                        return;
+                    }
+                    if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
+                        e.preventDefault();
+                        refazer();
+                        return;
+                    }
+                    if (e.code === "Space" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") {
+                        if (!segurandoEspaco) {
+                            segurandoEspaco = true;
+                            map.dragging.enable();
+                            mapEl.classList.add("cursor-pan");
+                            document.body.classList.add("cursor-pan-global");
+                        }
+                        e.preventDefault();
+                    }
+                    if (e.key === "Escape") {
+                        fecharMenuContexto();
+                        if (previewAcaoAtiva || previewQuarteiraoAtivo) {
+                            cancelarPreviewAcao();
+                            return;
+                        }
+                        if (E.modoEdicao) {
+                            E.selecionadas.clear();
+                            atualizarSelecao();
+                        }
+                    }
+                });
+
+                document.addEventListener("keyup", (e) => {
+                    if (e.code === "Space") {
+                        limparEstadoPanEspaco();
+                    }
+                });
+
+                map.on("zoomstart zoomanim", () => {
+                    if (typeof ocultarNumeracaoCanvas === "function") {
+                        ocultarNumeracaoCanvas();
+                    }
+                });
+
+                map.on("move", () => {
+                    if (!map._animatingZoom && typeof desenharNumeracaoCasas === "function") {
+                        desenharNumeracaoCasas();
+                    }
+                });
+
+                map.on("zoomend moveend viewreset resize", () => {
+                    if (typeof desenharNumeracaoCasas === "function") {
+                        desenharNumeracaoCasas();
+                    }
+                    if (E.modoEdicao && E.selecionadas.size > 0) {
+                        atualizarOverlayEdicao();
+                    }
+                });
+
+                segmento("segBase", trocarBase);
+                segmento("segCor", (v) => {
+                    E.criterio = v;
+                    pintar();
+                    desenharLegenda();
+                    if (cContorno) desenhar();
+                });
+                segmento("segPos", (v) => {
+                    if (E.modoEdicao && v === "real") {
+                        alert("A visualização 'Coordenada real' é apenas para leitura e referência do IBGE e não pode ser editada. Desative o Modo Edição para visualizá-la.");
+                        [...$("segPos").children].forEach((x) =>
+                            x.setAttribute("aria-pressed", String(x.dataset.v === "uniforme")),
+                        );
+                        return;
+                    }
+                    E.posicao = v;
+                    aplicarPosicao();
+                });
+                [
+                    "ckCasas",
+                    "ckPontos",
+                    "ckOutros",
+                    "ckContorno",
+                    "ckRotulos",
+                ].forEach((id) =>
+                    $(id).addEventListener("change", sincronizarCamadas),
+                );
+                $("rgOpac").addEventListener("input", (e) => {
+                    E.opac = +e.target.value / 100;
+                    $("vOpac").textContent = e.target.value + "%";
+                    pintar();
+                });
+                $("filtroRua").addEventListener("change", () => {
+                    E.selec = null;
+                    desenharLista();
+                    pintar();
+                });
+
+                // Controles de Modo e Edição
+                segmento("segModo", alternarModoApp);
+                segmento("segFerramentaEdicao", alternarFerramentaEdicao);
+
+                $("btnAgrupar").addEventListener("click", agrupar);
+                $("btnDesagrupar").addEventListener("click", desagrupar);
+                $("btnQuarteirao").addEventListener("click", iniciarAgrupamentoQuarteirao);
+                $("btnConfirmarQuarteirao").addEventListener("click", confirmarAgrupamentoQuarteirao);
+                $("btnCancelarQuarteirao").addEventListener("click", cancelarPreviewQuarteirao);
+
+                $("btnDesfazer").addEventListener("click", desfazer);
+                $("btnRefazer").addEventListener("click", refazer);
+
+                $("btnRotM15").addEventListener("click", () => rotacionarCasasSelecionadas(-15));
+                $("btnRotM1").addEventListener("click", () => rotacionarCasasSelecionadas(-1));
+                $("btnRotP1").addEventListener("click", () => rotacionarCasasSelecionadas(1));
+                $("btnRotP15").addEventListener("click", () => rotacionarCasasSelecionadas(15));
+                $("inpRotGraus").addEventListener("change", (e) => {
+                    const g = parseFloat(e.target.value) || 0;
+                    if (g !== 0) {
+                        rotacionarCasasSelecionadas(g);
+                        e.target.value = "0";
+                    }
+                });
+
+                $("btnSalvarAjustes").addEventListener("click", salvarArquivoAjustes);
+                $("btnExportarGeojson").addEventListener("click", exportarGeoJsonAjustado);
+
+                $("btnImportarAjustes").addEventListener("click", () => $("inputImportar").click());
+                $("inputImportar").addEventListener("change", (e) => {
+                    const file = e.target.files && e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (evt) => {
+                        try {
+                            const json = JSON.parse(evt.target.result);
+                            if (json && (json.ajustes || json.grupos)) {
+                                salvarSnapshotHistorico();
+                                aplicarSnapshot(json);
+                                marcarSalvo(false);
+                                salvarLocalStorage();
+                                st("Edições importadas com sucesso.");
+                            } else {
+                                alert("Arquivo JSON inválido para edições.");
+                            }
+                        } catch (err) {
+                            alert("Erro ao ler JSON: " + err.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = "";
+                });
+
+                const menuRes = $("menuRestaurar");
+                $("btnRestaurarMenu").addEventListener("click", () => {
+                    menuRes.style.display = menuRes.style.display === "none" ? "flex" : "none";
+                });
+                $("btnRestaurarSel").addEventListener("click", () => {
+                    menuRes.style.display = "none";
+                    restaurarSelecionadas();
+                });
+                $("btnRestaurarQuarteirao").addEventListener("click", () => {
+                    menuRes.style.display = "none";
+                    restaurarQuarteiraoSelecionado();
+                });
+                $("btnRestaurarTodas").addEventListener("click", () => {
+                    menuRes.style.display = "none";
+                    restaurarTodas();
+                });
+
+                // Alerta de fechamento se houver edições não salvas no arquivo
+                window.addEventListener("beforeunload", (e) => {
+                    if (!E.alteracoesSalvas && E.modoEdicao && Object.keys(E.ajustes).length > 0) {
+                        e.preventDefault();
+                        e.returnValue = "";
+                    }
+                });
+
+                aplicarTema();
+            })();
+        

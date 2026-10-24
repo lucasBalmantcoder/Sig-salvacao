@@ -160,6 +160,10 @@
                 border-radius: 4px;
                 text-align: center;
             }
+            .grupo-input-flutuante input.input-irregular {
+                color: #d97706;
+                font-weight: 600;
+            }
             /* ---------- Menu de Contexto (Botão Direito) ---------- */
             .menu-contexto {
                 position: absolute;
@@ -1063,7 +1067,7 @@
                     <div>
                         <div style="display: flex; align-items: baseline; gap: 8px;">
                             <h1>SIG Salvação</h1>
-                            <span class="versao-app" id="appVersao">v1.3.2</span>
+                            <span class="versao-app" id="appVersao">v1.3.4</span>
                         </div>
                         <p>
                             Residencial Salvação · Santarém/PA · base CNEFE/IBGE
@@ -1600,7 +1604,7 @@
                 const $ = (id) => document.getElementById(id);
 
                 // ============ Versão da Aplicação ============
-                const APP_VERSION = "1.3.2";
+                const APP_VERSION = "1.3.4";
 
                 // ============ Parâmetros Configuráveis de Padronização (em metros) ============
                 const PADRAO_LARGURA_M = 8.0;           // Largura uniforme de cada lote (frente da casa)
@@ -3416,6 +3420,7 @@
 
                 function aplicarSnapshot(snapshot) {
                     cancelarPreviewQuarteirao();
+                    invalidarSnapshotEspacamento();
                     E.ajustes = JSON.parse(JSON.stringify(snapshot.ajustes || {}));
                     E.grupos = JSON.parse(JSON.stringify(snapshot.grupos || []));
                     E.selecionadas = new Set(snapshot.selecionadas || []);
@@ -3515,6 +3520,18 @@
                     });
                 }
 
+                function centroideMetrosLote(anel) {
+                    if (!anel || !anel.length) return { x: 0, y: 0 };
+                    const n = Math.min(4, anel.length > 4 ? 4 : (anel.length - 1 || 1));
+                    let sx = 0, sy = 0;
+                    for (let i = 0; i < n; i++) {
+                        const p = L.CRS.EPSG3857.project(L.latLng(anel[i][1], anel[i][0]));
+                        sx += p.x;
+                        sy += p.y;
+                    }
+                    return { x: sx / n, y: sy / n };
+                }
+
                 function calcularCentroideMetros(features) {
                     let totalX = 0, totalY = 0, totalPts = 0;
                     for (const f of features) {
@@ -3562,6 +3579,7 @@
 
                 function agrupar() {
                     if (E.selecionadas.size < 2) return;
+                    invalidarSnapshotEspacamento();
                     salvarSnapshotHistorico();
                     const ids = Array.from(E.selecionadas);
                     const novoGrpId = "grp-" + Date.now();
@@ -3607,6 +3625,7 @@
 
                 function desagrupar() {
                     if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
                     salvarSnapshotHistorico();
 
                     E.grupos = E.grupos
@@ -3811,12 +3830,55 @@
                     cancelarPreviewAcao();
                 }
 
-                // ============ Numeração das Casas em Canvas ============
+                // ============ Numeração das Casas em Canvas (v1.3.3) ============
                 function ocultarNumeracaoCanvas() {
                     const canvas = $("canvasNumeracao");
                     if (!canvas) return;
                     const ctx = canvas.getContext("2d");
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                }
+
+                // Obtém os vértices exatos do polígono atualmente desenhado pelo Leaflet na tela
+                function obterVerticesPoligonoRenderizado(f) {
+                    const layer = mapaCamadasCasas.get(f.properties.id);
+                    if (layer && typeof layer.getLatLngs === "function") {
+                        const lls = layer.getLatLngs();
+                        const ring = Array.isArray(lls[0]) ? lls[0] : lls;
+                        if (ring && ring.length >= 3) {
+                            // Descarta o último vértice se for cópia do primeiro
+                            const n = (ring.length > 3 && ring[0].lat === ring[ring.length - 1].lat && ring[0].lng === ring[ring.length - 1].lng)
+                                ? ring.length - 1
+                                : ring.length;
+                            return ring.slice(0, n);
+                        }
+                    }
+                    const anel = (E.posicao === "uniforme" && f.properties._anelUni) ? f.properties._anelUni : f.geometry.coordinates[0];
+                    if (!anel || anel.length < 3) return null;
+                    const n = (anel.length > 3 && anel[0][0] === anel[anel.length - 1][0] && anel[0][1] === anel[anel.length - 1][1])
+                        ? anel.length - 1
+                        : anel.length;
+                    const arr = [];
+                    for (let i = 0; i < n; i++) {
+                        arr.push(L.latLng(anel[i][1], anel[i][0]));
+                    }
+                    return arr;
+                }
+
+                // Calcula o centróide exato do polígono em pixels de tela
+                function calcularCentroPoligonoPixels(f) {
+                    const vertices = obterVerticesPoligonoRenderizado(f);
+                    if (!vertices || vertices.length < 3) return null;
+                    const pts = vertices.map((ll) => map.latLngToContainerPoint(ll));
+                    const n = pts.length;
+                    return {
+                        x: pts.reduce((s, p) => s + p.x, 0) / n,
+                        y: pts.reduce((s, p) => s + p.y, 0) / n,
+                        pts,
+                        vertices
+                    };
                 }
 
                 function desenharNumeracaoCasas() {
@@ -3833,16 +3895,17 @@
                         canvas.height = Math.round(h * dpr);
                     }
                     const ctx = canvas.getContext("2d");
-                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                    ctx.clearRect(0, 0, w, h);
+                    // Limpeza total do buffer físico para evitar qualquer fantasma ou duplicidade
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.restore();
 
                     if (!E.numeracaoCasas) return;
                     const zoom = map.getZoom();
                     if (zoom < 18) return; // Legível apenas em zoom >= 18
 
-                    const bounds = map.getBounds();
-                    const fontSize = Math.max(9, Math.round(8.5 + (zoom - 18) * 3));
-                    ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
 
@@ -3850,44 +3913,71 @@
                     const textColor = isDark ? "#ffffff" : "#111827";
                     const strokeColor = isDark ? "rgba(0,0,0,0.92)" : "rgba(255,255,255,0.96)";
 
+                    const bounds = map.getBounds();
+                    const rotulosDesenhados = [];
+
                     for (const f of E.casas) {
                         const num = f.properties.numero;
                         if (!num) continue;
-                        const anel = (E.posicao === "uniforme" && f.properties._anelUni) ? f.properties._anelUni : f.geometry.coordinates[0];
-                        if (!anel || anel.length < 3) continue;
 
-                        // Posição sempre calculada a partir do centróide geométrico atualizado
-                        const c = centroide(anel);
-                        const latLng = L.latLng(c[1], c[0]);
-                        if (!bounds.contains(latLng)) continue;
+                        const geo = calcularCentroPoligonoPixels(f);
+                        if (!geo) continue;
 
-                        const pt = map.latLngToContainerPoint(latLng);
-                        if (pt.x < -30 || pt.x > w + 30 || pt.y < -30 || pt.y > h + 30) continue;
+                        const { x: cx, y: cy, pts, vertices } = geo;
 
-                        // Determina as dimensões na tela do polígono para evitar que o número ultrapasse as bordas
-                        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-                        for (let i = 0; i < anel.length - 1; i++) {
-                            const pSc = map.latLngToContainerPoint([anel[i][1], anel[i][0]]);
-                            if (pSc.x < minX) minX = pSc.x;
-                            if (pSc.x > maxX) maxX = pSc.x;
-                            if (pSc.y < minY) minY = pSc.y;
-                            if (pSc.y > maxY) maxY = pSc.y;
+                        // Se o centroide ou todos os vértices estiverem fora dos limites da tela, descarta
+                        if (cx < -40 || cx > w + 40 || cy < -40 || cy > h + 40) continue;
+                        if (!vertices.some((ll) => bounds.contains(ll))) continue;
+
+                        // Dimensões do lote projetadas na tela
+                        let menorLado = Infinity;
+                        for (let i = 0; i < pts.length; i++) {
+                            const p1 = pts[i];
+                            const p2 = pts[(i + 1) % pts.length];
+                            const lado = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                            if (lado < menorLado) menorLado = lado;
                         }
-                        const polyW = maxX - minX;
-                        const polyH = maxY - minY;
-                        const menorDimensao = Math.min(polyW, polyH);
 
-                        const textMetrics = ctx.measureText(num);
-                        // Se o número não couber com folga dentro do polígono, oculta-o para não sobrepor outros
-                        if (textMetrics.width > menorDimensao * 0.88 || fontSize > Math.max(polyW, polyH) * 0.85) {
+                        // Se o lote for menor que 13 pixels na tela, oculta o rótulo para não poluir
+                        if (menorLado < 13) continue;
+
+                        // Ajusta a fonte dinamicamente à largura do polígono com margem interna
+                        let fontSize = Math.max(8, Math.min(13, Math.round(menorLado * 0.44)));
+                        ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                        let metrics = ctx.measureText(num);
+
+                        // Se o texto for mais largo que 86% da menor dimensão do lote, reduz a fonte
+                        if (metrics.width > menorLado * 0.86 && fontSize > 8) {
+                            fontSize = 8;
+                            ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`;
+                            metrics = ctx.measureText(num);
+                        }
+
+                        // Se mesmo com a menor fonte não couber dentro do lote, oculta para não sobrepor
+                        if (metrics.width > menorLado * 0.90) {
                             continue;
                         }
 
+                        // Detecção de colisão com rótulos já desenhados na mesma tela
+                        const halfW = metrics.width / 2 + 1.5;
+                        const halfH = fontSize / 2 + 1.5;
+                        let colide = false;
+                        for (const r of rotulosDesenhados) {
+                            if (Math.abs(cx - r.cx) < (halfW + r.halfW) && Math.abs(cy - r.cy) < (halfH + r.halfH)) {
+                                colide = true;
+                                break;
+                            }
+                        }
+                        if (colide) continue;
+
+                        rotulosDesenhados.push({ cx, cy, halfW, halfH });
+
+                        // Desenha o número no centro geométrico exato do polígono
                         ctx.lineWidth = 2.5;
                         ctx.strokeStyle = strokeColor;
-                        ctx.strokeText(num, pt.x, pt.y);
+                        ctx.strokeText(num, cx, cy);
                         ctx.fillStyle = textColor;
-                        ctx.fillText(num, pt.x, pt.y);
+                        ctx.fillText(num, cx, cy);
                     }
                 }
 
@@ -3898,17 +3988,91 @@
                     st(`Numeração das casas <b>${E.numeracaoCasas ? "ativada" : "desativada"}</b>.`);
                 }
 
+                // ============ Verificação Obrigatória da Numeração (Console) ============
+                window.verificarNumeracao = function () {
+                    if (!E.casas || !E.casas.length) {
+                        return { totalVisiveis: 0, desviosMaior1Px: 0, maxDesvio: 0, conforme: true };
+                    }
+                    const bounds = map.getBounds();
+                    let totalVisiveis = 0;
+                    let desviosMaior1Px = 0;
+                    let maxDesvio = 0;
+                    const desviosLista = [];
+
+                    for (const f of E.casas) {
+                        const geo = calcularCentroPoligonoPixels(f);
+                        if (!geo) continue;
+                        const { x: cx, y: cy, vertices } = geo;
+                        if (!vertices.some((ll) => bounds.contains(ll))) continue;
+
+                        totalVisiveis++;
+
+                        // Calcula o centroide dos vértices em pixels
+                        const pts = vertices.map((ll) => map.latLngToContainerPoint(ll));
+                        const polyCx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+                        const polyCy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+
+                        // Desvio entre a posição do rótulo e o centroide do polígono
+                        const desvio = Math.hypot(cx - polyCx, cy - polyCy);
+                        if (desvio > maxDesvio) maxDesvio = desvio;
+
+                        if (desvio > 1.0) {
+                            desviosMaior1Px++;
+                            desviosLista.push({
+                                id: f.properties.id,
+                                numero: f.properties.numero,
+                                desvio: Number(desvio.toFixed(4)),
+                                polyCenter: [Number(polyCx.toFixed(2)), Number(polyCy.toFixed(2))],
+                                labelCenter: [Number(cx.toFixed(2)), Number(cy.toFixed(2))]
+                            });
+                        }
+                    }
+
+                    const relatorio = {
+                        versao: APP_VERSION,
+                        zoom: map.getZoom(),
+                        modo: E.modoEdicao ? "Edição" : "Visualização",
+                        posicao: E.posicao,
+                        totalVisiveis,
+                        desviosMaior1Px,
+                        maxDesvioPx: Number(maxDesvio.toFixed(4)),
+                        conforme: desviosMaior1Px === 0,
+                        amostraInconformes: desviosLista.slice(0, 5)
+                    };
+
+                    console.log("[SIG Salvação] Verificação de Numeração:", relatorio);
+                    return relatorio;
+                };
+
                 // ============ Alinhamentos, Nivelamento e Espaçamentos ============
                 let snapshotBaseEspacamento = null;
                 let historicoEspacamentoSalvo = false;
 
+                function invalidarSnapshotEspacamento() {
+                    snapshotBaseEspacamento = null;
+                    historicoEspacamentoSalvo = false;
+                }
+
+                function formatarValorEspacamento(valor, irregular) {
+                    if (valor === null || valor === undefined || isNaN(valor)) return "0,0";
+                    const sinal = valor < -0.05 ? "-" : "";
+                    const num = Math.abs(valor).toFixed(1).replace(".", ",");
+                    const base = (valor >= -0.05 && valor < 0.05) ? "0,0" : (sinal + num);
+                    return irregular ? `~ ${base}` : base;
+                }
+
+                function parseValEspacamento(str) {
+                    if (!str) return NaN;
+                    const limpo = String(str).replace("~", "").trim().replace(",", ".");
+                    const val = parseFloat(limpo);
+                    if (isNaN(val) || val < 0) return NaN;
+                    return Math.round(val * 10) / 10;
+                }
+
                 // Ajuste de reta / PCA das posições para encontrar o eixo principal da seleção
                 function calcularEixoPrincipalSelecao(features) {
                     if (!features || features.length < 2) return 0;
-                    const pts = features.map((f) => {
-                        const c = centroide(f.properties._anelUni);
-                        return L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
-                    });
+                    const pts = features.map((f) => centroideMetrosLote(f.properties._anelUni));
                     const m = pts.length;
                     const mx = pts.reduce((s, p) => s + p.x, 0) / m;
                     const my = pts.reduce((s, p) => s + p.y, 0) / m;
@@ -4041,10 +4205,9 @@
                     const nx = -uy;
                     const ny = ux;
 
-                    // Projeção dos centros de cada lote no sistema coordenado da fileira (u, n)
+                    // Projeção dos centros métricos exatos de cada lote no sistema coordenado da fileira (u, n)
                     const itens = feats.map((f) => {
-                        const c = centroide(f.properties._anelUni);
-                        const pM = L.CRS.EPSG3857.project(L.latLng(c[1], c[0]));
+                        const pM = centroideMetrosLote(f.properties._anelUni);
                         const t = (pM.x - centroMetros.x) * ux + (pM.y - centroMetros.y) * uy;
                         const d = (pM.x - centroMetros.x) * nx + (pM.y - centroMetros.y) * ny;
                         return {
@@ -4058,43 +4221,56 @@
                         };
                     });
 
-                    // Identifica se há 2 fileiras paralelas
-                    const dVals = itens.map((it) => it.d);
-                    const minD = Math.min(...dVals);
-                    const maxD = Math.max(...dVals);
-                    const temDuasFileiras = (maxD - minD) > (PADRAO_PROFUNDIDADE_M * 0.4);
-
-                    let fileiras = [];
-                    if (temDuasFileiras) {
-                        const midD = (minD + maxD) / 2;
-                        const fil1 = itens.filter((it) => it.d <= midD).sort((a, b) => a.t - b.t);
-                        const fil2 = itens.filter((it) => it.d > midD).sort((a, b) => a.t - b.t);
-                        if (fil1.length) fileiras.push(fil1);
-                        if (fil2.length) fileiras.push(fil2);
-                    } else {
-                        fileiras.push(itens.sort((a, b) => a.t - b.t));
+                    // Detecção de fileiras por tolerância consecutiva na coordenada perpendicular d
+                    const ordenadosD = [...itens].sort((a, b) => a.d - b.d);
+                    const fileiras = [];
+                    let filAtual = [ordenadosD[0]];
+                    for (let k = 1; k < ordenadosD.length; k++) {
+                        const it = ordenadosD[k];
+                        const prev = ordenadosD[k - 1];
+                        if ((it.d - prev.d) > (PADRAO_PROFUNDIDADE_M * 0.5)) {
+                            fileiras.push(filAtual);
+                            filAtual = [it];
+                        } else {
+                            filAtual.push(it);
+                        }
                     }
+                    if (filAtual.length) fileiras.push(filAtual);
+
+                    // Para cada fileira, ordena ao longo do eixo u e calcula âncoras locais
+                    fileiras.forEach((fil) => {
+                        fil.sort((a, b) => a.t - b.t);
+                        fil.tBaseMedia = fil.reduce((s, it) => s + it.t, 0) / fil.length;
+                        fil.dBaseMedia = fil.reduce((s, it) => s + it.d, 0) / fil.length;
+                    });
 
                     // Calcula o espaçamento horizontal real atual (entre bordas de lotes adjacentes: deltaT - W)
-                    let somasEspH = [];
+                    const gapsH = [];
                     fileiras.forEach((fil) => {
                         for (let k = 0; k < fil.length - 1; k++) {
                             const distBordas = (fil[k + 1].t - fil[k].t) - PADRAO_LARGURA_M;
-                            somasEspH.push(distBordas);
+                            gapsH.push(distBordas);
                         }
                     });
-                    const espHMedio = somasEspH.length
-                        ? Math.max(0, somasEspH.reduce((a, b) => a + b, 0) / somasEspH.length)
+                    const espHMedio = gapsH.length
+                        ? (gapsH.reduce((a, b) => a + b, 0) / gapsH.length)
                         : PADRAO_ESPACAMENTO_M;
+                    const espHIrregular = gapsH.length >= 2
+                        ? (Math.max(...gapsH) - Math.min(...gapsH)) > 0.05
+                        : false;
 
-                    // Calcula o espaçamento vertical real atual (entre bordas das duas fileiras: deltaD - D)
-                    let espVReal = 0;
-                    if (fileiras.length >= 2) {
-                        const mediaD1 = fileiras[0].reduce((s, it) => s + it.d, 0) / fileiras[0].length;
-                        const mediaD2 = fileiras[1].reduce((s, it) => s + it.d, 0) / fileiras[1].length;
-                        const distEntreFileiras = Math.abs(mediaD2 - mediaD1);
-                        espVReal = Math.max(0, distEntreFileiras - PADRAO_PROFUNDIDADE_M);
+                    // Calcula o espaçamento vertical real atual (entre centros das fileiras - D)
+                    const gapsV = [];
+                    for (let r = 0; r < fileiras.length - 1; r++) {
+                        const distBordasV = (fileiras[r + 1].dBaseMedia - fileiras[r].dBaseMedia) - PADRAO_PROFUNDIDADE_M;
+                        gapsV.push(distBordasV);
                     }
+                    const espVMedio = gapsV.length
+                        ? (gapsV.reduce((a, b) => a + b, 0) / gapsV.length)
+                        : 0.0;
+                    const espVIrregular = gapsV.length >= 2
+                        ? (Math.max(...gapsV) - Math.min(...gapsV)) > 0.05
+                        : false;
 
                     snapshotBaseEspacamento = {
                         feats,
@@ -4104,12 +4280,15 @@
                         nx,
                         ny,
                         fileiras,
-                        temDuasFileiras,
+                        temDuasFileiras: fileiras.length >= 2,
                         espHAtual: Number(espHMedio.toFixed(1)),
-                        espVAtual: Number(espVReal.toFixed(1))
+                        espVAtual: Number(espVMedio.toFixed(1)),
+                        espHIrregular,
+                        espVIrregular,
+                        targetH: null,
+                        targetV: null
                     };
 
-                    historicoEspacamentoSalvo = false;
                     return snapshotBaseEspacamento;
                 }
 
@@ -4132,120 +4311,161 @@
                     const valorAlvo = Math.max(0, novoEspacamentoM);
 
                     if (eixo === "h") {
+                        snap.targetH = valorAlvo;
                         snap.espHAtual = valorAlvo;
-                        const passo = W + valorAlvo;
-
-                        snap.fileiras.forEach((fil) => {
-                            if (fil.length < 2) return;
-                            const m = fil.length;
-                            const tMediaFil = fil.reduce((s, it) => s + it.t, 0) / m;
-                            const t0 = tMediaFil - ((m - 1) / 2) * passo;
-
-                            fil.forEach((it, idx) => {
-                                const targetT = t0 + idx * passo;
-                                const deltaT = targetT - it.t;
-                                const dx = deltaT * snap.ux;
-                                const dy = deltaT * snap.uy;
-                                const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
-
-                                const f = it.f;
-                                f.properties._anelUni = novoAnel;
-                                if (E.posicao === "uniforme") {
-                                    f.geometry.coordinates = [novoAnel];
-                                    f.properties._c = centroide(novoAnel);
-                                    const layer = mapaCamadasCasas.get(it.id);
-                                    if (layer) {
-                                        layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
-                                        layer.redraw();
-                                    }
-                                }
-                                const cLL = centroide(novoAnel);
-                                E.ajustes[it.id] = {
-                                    lng: Number(cLL[0].toFixed(7)),
-                                    lat: Number(cLL[1].toFixed(7)),
-                                    rot_deg: it.rotBase,
-                                    grupo_id: obterIdGrupo(it.id),
-                                    coords: novoAnel
-                                };
-                            });
-                        });
+                        snap.espHIrregular = false;
                     } else if (eixo === "v") {
                         if (!snap.temDuasFileiras || snap.fileiras.length < 2) {
-                            st("O espaçamento vertical requer duas fileiras paralelas na seleção.");
+                            st("O espaçamento vertical requer ao menos duas fileiras na seleção.");
                             return;
                         }
+                        snap.targetV = valorAlvo;
                         snap.espVAtual = valorAlvo;
-                        const distCentrosAlvo = D + valorAlvo;
-
-                        const fil1 = snap.fileiras[0];
-                        const fil2 = snap.fileiras[1];
-                        const mediaD1 = fil1.reduce((s, it) => s + it.d, 0) / fil1.length;
-                        const mediaD2 = fil2.reduce((s, it) => s + it.d, 0) / fil2.length;
-                        const dCentroFileiras = (mediaD1 + mediaD2) / 2;
-
-                        // Fileira 1 fica em -distCentrosAlvo/2 e Fileira 2 em +distCentrosAlvo/2 relativo ao centro
-                        const targetD1 = dCentroFileiras - distCentrosAlvo / 2;
-                        const targetD2 = dCentroFileiras + distCentrosAlvo / 2;
-                        const deltaD1 = targetD1 - mediaD1;
-                        const deltaD2 = targetD2 - mediaD2;
-
-                        fil1.forEach((it) => {
-                            const dx = deltaD1 * snap.nx;
-                            const dy = deltaD1 * snap.ny;
-                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
-                            const f = it.f;
-                            f.properties._anelUni = novoAnel;
-                            if (E.posicao === "uniforme") {
-                                f.geometry.coordinates = [novoAnel];
-                                f.properties._c = centroide(novoAnel);
-                                const layer = mapaCamadasCasas.get(it.id);
-                                if (layer) {
-                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
-                                    layer.redraw();
-                                }
-                            }
-                            const cLL = centroide(novoAnel);
-                            E.ajustes[it.id] = {
-                                lng: Number(cLL[0].toFixed(7)),
-                                lat: Number(cLL[1].toFixed(7)),
-                                rot_deg: it.rotBase,
-                                grupo_id: obterIdGrupo(it.id),
-                                coords: novoAnel
-                            };
-                        });
-
-                        fil2.forEach((it) => {
-                            const dx = deltaD2 * snap.nx;
-                            const dy = deltaD2 * snap.ny;
-                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
-                            const f = it.f;
-                            f.properties._anelUni = novoAnel;
-                            if (E.posicao === "uniforme") {
-                                f.geometry.coordinates = [novoAnel];
-                                f.properties._c = centroide(novoAnel);
-                                const layer = mapaCamadasCasas.get(it.id);
-                                if (layer) {
-                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
-                                    layer.redraw();
-                                }
-                            }
-                            const cLL = centroide(novoAnel);
-                            E.ajustes[it.id] = {
-                                lng: Number(cLL[0].toFixed(7)),
-                                lat: Number(cLL[1].toFixed(7)),
-                                rot_deg: it.rotBase,
-                                grupo_id: obterIdGrupo(it.id),
-                                coords: novoAnel
-                            };
-                        });
+                        snap.espVIrregular = false;
                     }
+
+                    const R = snap.fileiras.length;
+                    const dGlobalMedia = snap.fileiras.reduce((s, fil) => s + fil.dBaseMedia, 0) / R;
+
+                    snap.fileiras.forEach((fil, r) => {
+                        const m = fil.length;
+                        let t0 = fil.tBaseMedia;
+                        let passoH = W + (snap.targetH !== null ? snap.targetH : 0);
+                        if (snap.targetH !== null && m >= 2) {
+                            t0 = fil.tBaseMedia - ((m - 1) / 2) * passoH;
+                        }
+
+                        let deltaD = 0;
+                        if (snap.targetV !== null && R >= 2) {
+                            const passoV = D + snap.targetV;
+                            const d0 = dGlobalMedia - ((R - 1) / 2) * passoV;
+                            const dRowTarget = d0 + r * passoV;
+                            deltaD = dRowTarget - fil.dBaseMedia;
+                        }
+
+                        fil.forEach((it, k) => {
+                            const tTarget = (snap.targetH !== null && m >= 2) ? (t0 + k * passoH) : it.t;
+                            const deltaT = tTarget - it.t;
+
+                            const dx = deltaT * snap.ux + deltaD * snap.nx;
+                            const dy = deltaT * snap.uy + deltaD * snap.ny;
+                            const novoAnel = aplicarTranslacaoMetros(it.coordsBase, dx, dy);
+
+                            const f = it.f;
+                            f.properties._anelUni = novoAnel;
+                            if (E.posicao === "uniforme") {
+                                f.geometry.coordinates = [novoAnel];
+                                f.properties._c = centroide(novoAnel);
+                                const layer = mapaCamadasCasas.get(it.id);
+                                if (layer) {
+                                    layer.setLatLngs(novoAnel.map((pt) => [pt[1], pt[0]]));
+                                    layer.redraw();
+                                }
+                            }
+                            const cLL = centroide(novoAnel);
+                            E.ajustes[it.id] = {
+                                lng: Number(cLL[0].toFixed(7)),
+                                lat: Number(cLL[1].toFixed(7)),
+                                rot_deg: it.rotBase,
+                                grupo_id: obterIdGrupo(it.id),
+                                coords: novoAnel
+                            };
+                        });
+                    });
 
                     marcarSalvo(false);
                     salvarLocalStorage();
-                    atualizarOverlayEdicao(true); // Mantém foco e valores nos inputs
+                    atualizarOverlayEdicao(true);
                     desenharNumeracaoCasas();
                     st(`Espaçamento ${eixo === "h" ? "horizontal" : "vertical"} ajustado para <b>${valorAlvo.toFixed(1).replace(".", ",")}m</b>.`);
                 }
+
+                // ============ Auditoria de Espaçamento via Console ============
+                window.verificarEspacamento = function(paramH, paramV) {
+                    const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
+                    if (feats.length < 2) {
+                        console.warn("[verificarEspacamento] Selecione ao menos 2 casas.");
+                        return null;
+                    }
+
+                    const snap = prepararSnapshotEspacamento();
+                    if (!snap) return null;
+
+                    const targetH = (paramH !== undefined) ? Number(paramH) : (snap.targetH !== null ? snap.targetH : snap.espHAtual);
+                    const targetV = (paramV !== undefined) ? Number(paramV) : (snap.targetV !== null ? snap.targetV : snap.espVAtual);
+
+                    console.log(`%c[verificarEspacamento] Verificando ${feats.length} casas selecionadas. Alvo H: ${targetH}m | Alvo V: ${targetV}m`, "font-weight:bold;color:#0284c7;");
+                    console.log(`Fileiras detectadas: ${snap.fileiras.length}`);
+
+                    let totalDesviosH = 0;
+                    const relatorioFileiras = [];
+
+                    snap.fileiras.forEach((fil, r) => {
+                        const espacos = [];
+                        let desviosFil = 0;
+                        for (let k = 0; k < fil.length - 1; k++) {
+                            const p1 = centroideMetrosLote(fil[k].f.properties._anelUni);
+                            const p2 = centroideMetrosLote(fil[k + 1].f.properties._anelUni);
+                            const distBordas = ((p2.x - p1.x) * snap.ux + (p2.y - p1.y) * snap.uy) - PADRAO_LARGURA_M;
+                            const erro = Math.abs(distBordas - targetH);
+                            if (erro > 0.05) {
+                                totalDesviosH++;
+                                desviosFil++;
+                            }
+                            espacos.push({
+                                de: fil[k].f.properties.numero || fil[k].id,
+                                para: fil[k + 1].f.properties.numero || fil[k + 1].id,
+                                distM: Number(distBordas.toFixed(3)),
+                                desvio: Number(erro.toFixed(3))
+                            });
+                        }
+                        relatorioFileiras.push({
+                            fileira: r + 1,
+                            totalCasas: fil.length,
+                            casas: fil.map((it) => it.f.properties.numero || it.id),
+                            espacos,
+                            desviosH: desviosFil
+                        });
+                        console.log(`  Fileira ${r + 1} (${fil.length} casas):`, espacos.map((e) => `${e.de}->${e.para}: ${e.distM}m`).join(", "));
+                    });
+
+                    let totalDesviosV = 0;
+                    const espacosV = [];
+                    if (snap.fileiras.length >= 2) {
+                        for (let r = 0; r < snap.fileiras.length - 1; r++) {
+                            const fil1 = snap.fileiras[r];
+                            const fil2 = snap.fileiras[r + 1];
+                            const d1 = fil1.reduce((s, it) => {
+                                const p = centroideMetrosLote(it.f.properties._anelUni);
+                                return s + ((p.x - snap.centroMetros.x) * snap.nx + (p.y - snap.centroMetros.y) * snap.ny);
+                            }, 0) / fil1.length;
+                            const d2 = fil2.reduce((s, it) => {
+                                const p = centroideMetrosLote(it.f.properties._anelUni);
+                                return s + ((p.x - snap.centroMetros.x) * snap.nx + (p.y - snap.centroMetros.y) * snap.ny);
+                            }, 0) / fil2.length;
+                            const distBordasV = (d2 - d1) - PADRAO_PROFUNDIDADE_M;
+                            const erro = Math.abs(distBordasV - targetV);
+                            if (erro > 0.05) totalDesviosV++;
+                            espacosV.push({
+                                fileiraA: r + 1,
+                                fileiraB: r + 2,
+                                distM: Number(distBordasV.toFixed(3)),
+                                desvio: Number(erro.toFixed(3))
+                            });
+                            console.log(`  Espaçamento V entre fileiras ${r + 1} e ${r + 2}: ${distBordasV.toFixed(3)}m (alvo: ${targetV}m, erro: ${erro.toFixed(3)}m)`);
+                        }
+                    }
+
+                    console.log(`%c[verificarEspacamento] Desvios H > 0.05m = ${totalDesviosH} | Desvios V > 0.05m = ${totalDesviosV}`, totalDesviosH === 0 && totalDesviosV === 0 ? "color:green;font-weight:bold;" : "color:red;font-weight:bold;");
+                    return {
+                        totalCasas: feats.length,
+                        fileiras: relatorioFileiras,
+                        espacosV,
+                        totalDesviosH,
+                        totalDesviosV,
+                        valido: (totalDesviosH === 0 && totalDesviosV === 0)
+                    };
+                };
 
                 // ============ Sistema Unificado de Pré-visualização ============
                 let previewAcaoAtiva = null;
@@ -4335,6 +4555,7 @@
                         : (calc.tipo === "linha" ? `${ids.length} casas alinhadas em linha horizontal` : `${ids.length} casas niveladas na horizontal`);
 
                     cancelarPreviewAcao();
+                    invalidarSnapshotEspacamento();
                     marcarSalvo(false);
                     salvarLocalStorage();
                     atualizarOverlayEdicao();
@@ -4368,6 +4589,7 @@
                 // ============ Movimentação e Rotação ============
                 function moverCasasSelecionadas(dx, dy) {
                     if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
                     for (const id of E.selecionadas) {
                         const f = mapaCasasPorId.get(id);
                         if (!f) continue;
@@ -4399,6 +4621,7 @@
 
                 function rotacionarCasasSelecionadas(graus) {
                     if (E.selecionadas.size === 0 || !graus) return;
+                    invalidarSnapshotEspacamento();
                     salvarSnapshotHistorico();
                     const feats = Array.from(E.selecionadas).map((id) => mapaCasasPorId.get(id)).filter(Boolean);
                     if (!feats.length) return;
@@ -4438,6 +4661,7 @@
                 // ============ Restauração ============
                 function restaurarSelecionadas() {
                     if (E.selecionadas.size === 0) return;
+                    invalidarSnapshotEspacamento();
                     salvarSnapshotHistorico();
                     for (const id of E.selecionadas) {
                         delete E.ajustes[id];
@@ -4852,8 +5076,27 @@
                         if (!snapshotBaseEspacamento && podeAgrupar) {
                             prepararSnapshotEspacamento();
                         }
-                        const valHStr = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual.toFixed(1).replace(".", ",") : "1,0";
-                        const valVStr = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual.toFixed(1).replace(".", ",") : "0,0";
+                        const valHStr = snapshotBaseEspacamento
+                            ? formatarValorEspacamento(
+                                snapshotBaseEspacamento.targetH !== null ? snapshotBaseEspacamento.targetH : snapshotBaseEspacamento.espHAtual,
+                                snapshotBaseEspacamento.espHIrregular
+                              )
+                            : "1,0";
+                        const valVStr = snapshotBaseEspacamento
+                            ? formatarValorEspacamento(
+                                snapshotBaseEspacamento.targetV !== null ? snapshotBaseEspacamento.targetV : snapshotBaseEspacamento.espVAtual,
+                                snapshotBaseEspacamento.espVIrregular
+                              )
+                            : "0,0";
+
+                        const titleH = (snapshotBaseEspacamento && snapshotBaseEspacamento.espHIrregular)
+                            ? "espaçamentos irregulares; ao aplicar, serão uniformizados"
+                            : "Espaçamento horizontal uniforme entre as bordas dos lotes (em metros)";
+                        const titleV = (snapshotBaseEspacamento && snapshotBaseEspacamento.espVIrregular)
+                            ? "espaçamentos irregulares; ao aplicar, serão uniformizados"
+                            : "Espaçamento vertical uniforme entre as bordas das fileiras (em metros)";
+                        const classH = (snapshotBaseEspacamento && snapshotBaseEspacamento.espHIrregular) ? "input-irregular" : "";
+                        const classV = (snapshotBaseEspacamento && snapshotBaseEspacamento.espVIrregular) ? "input-irregular" : "";
 
                         barra.innerHTML = `
                             <b>${E.selecionadas.size} casa(s)</b>
@@ -4862,19 +5105,19 @@
                             ${algumEmGrupo ? '<button class="btn" id="btnFlutuanteDesagrupar" title="Desagrupar casas selecionadas">⛓️‍💥 Desagrupar</button>' : ""}
                             ${podeAgrupar ? `
                                 <span class="divisor-flutuante"></span>
-                                <div class="grupo-input-flutuante" title="Espaçamento horizontal uniforme entre as bordas dos lotes (em metros)">
+                                <div class="grupo-input-flutuante" title="${titleH}">
                                     <span>↔ H:</span>
-                                    <button class="btn-micro" id="btnFlutuanteEspHMenos" title="Diminuir espaçamento horizontal">-</button>
-                                    <input type="text" id="inputFlutuanteEspH" value="${valHStr}" style="width:40px;height:20px;font-size:11px;" />
-                                    <button class="btn-micro" id="btnFlutuanteEspHMais" title="Aumentar espaçamento horizontal">+</button>
+                                    <button class="btn-micro" id="btnFlutuanteEspHMenos" title="Diminuir espaçamento horizontal (0,1m)">-</button>
+                                    <input type="text" id="inputFlutuanteEspH" class="${classH}" value="${valHStr}" title="${titleH}" style="width:48px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspHMais" title="Aumentar espaçamento horizontal (0,1m)">+</button>
                                     <span>m</span>
                                 </div>
                                 <span class="divisor-flutuante"></span>
-                                <div class="grupo-input-flutuante" title="Espaçamento vertical uniforme entre as bordas das fileiras (em metros)">
+                                <div class="grupo-input-flutuante" title="${titleV}">
                                     <span>↕ V:</span>
-                                    <button class="btn-micro" id="btnFlutuanteEspVMenos" title="Diminuir espaçamento vertical">-</button>
-                                    <input type="text" id="inputFlutuanteEspV" value="${valVStr}" style="width:40px;height:20px;font-size:11px;" />
-                                    <button class="btn-micro" id="btnFlutuanteEspVMais" title="Aumentar espaçamento vertical">+</button>
+                                    <button class="btn-micro" id="btnFlutuanteEspVMenos" title="Diminuir espaçamento vertical (0,1m)">-</button>
+                                    <input type="text" id="inputFlutuanteEspV" class="${classV}" value="${valVStr}" title="${titleV}" style="width:48px;height:20px;font-size:11px;" />
+                                    <button class="btn-micro" id="btnFlutuanteEspVMais" title="Aumentar espaçamento vertical (0,1m)">+</button>
                                     <span>m</span>
                                 </div>
                             ` : ""}
@@ -4891,34 +5134,43 @@
                         const bDes = $("btnFlutuanteDesagrupar");
                         if (bDes) bDes.onclick = (e) => { e.stopPropagation(); desagrupar(); };
 
-                        const parseValPtBr = (str) => {
-                            if (!str) return NaN;
-                            return parseFloat(str.trim().replace(",", "."));
-                        };
-
                         const bHMenos = $("btnFlutuanteEspHMenos");
                         const bHMais = $("btnFlutuanteEspHMais");
                         const inH = $("inputFlutuanteEspH");
                         if (bHMenos) bHMenos.onclick = (e) => {
                             e.stopPropagation();
-                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual : 1.0;
-                            const novo = Math.max(0, Math.round((cur - 0.5) * 10) / 10);
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetH !== null ? snap.targetH : snap.espHAtual) : 1.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.max(0, Math.round((baseVal - 0.1) * 10) / 10);
                             aplicarEspacamentoDeterministo("h", novo);
                         };
                         if (bHMais) bHMais.onclick = (e) => {
                             e.stopPropagation();
-                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual : 1.0;
-                            const novo = Math.min(30, Math.round((cur + 0.5) * 10) / 10);
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetH !== null ? snap.targetH : snap.espHAtual) : 1.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.min(30, Math.round((baseVal + 0.1) * 10) / 10);
                             aplicarEspacamentoDeterministo("h", novo);
                         };
                         if (inH) {
                             inH.onclick = (e) => e.stopPropagation();
+                            inH.onkeydown = (e) => {
+                                if (e.key === "Enter") {
+                                    e.target.blur();
+                                }
+                            };
                             inH.onchange = (e) => {
-                                const val = parseValPtBr(e.target.value);
+                                const val = parseValEspacamento(e.target.value);
                                 if (!isNaN(val) && val >= 0) {
                                     aplicarEspacamentoDeterministo("h", val);
                                 } else {
-                                    inH.value = snapshotBaseEspacamento ? snapshotBaseEspacamento.espHAtual.toFixed(1).replace(".", ",") : "1,0";
+                                    inH.value = snapshotBaseEspacamento
+                                        ? formatarValorEspacamento(
+                                            snapshotBaseEspacamento.targetH !== null ? snapshotBaseEspacamento.targetH : snapshotBaseEspacamento.espHAtual,
+                                            snapshotBaseEspacamento.espHIrregular
+                                          )
+                                        : "1,0";
                                 }
                             };
                         }
@@ -4928,24 +5180,38 @@
                         const inV = $("inputFlutuanteEspV");
                         if (bVMenos) bVMenos.onclick = (e) => {
                             e.stopPropagation();
-                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual : 0.0;
-                            const novo = Math.max(0, Math.round((cur - 0.5) * 10) / 10);
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetV !== null ? snap.targetV : snap.espVAtual) : 0.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.max(0, Math.round((baseVal - 0.1) * 10) / 10);
                             aplicarEspacamentoDeterministo("v", novo);
                         };
                         if (bVMais) bVMais.onclick = (e) => {
                             e.stopPropagation();
-                            const cur = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual : 0.0;
-                            const novo = Math.min(30, Math.round((cur + 0.5) * 10) / 10);
+                            const snap = snapshotBaseEspacamento;
+                            const cur = snap ? (snap.targetV !== null ? snap.targetV : snap.espVAtual) : 0.0;
+                            const baseVal = Math.max(0, cur);
+                            const novo = Math.min(30, Math.round((baseVal + 0.1) * 10) / 10);
                             aplicarEspacamentoDeterministo("v", novo);
                         };
                         if (inV) {
                             inV.onclick = (e) => e.stopPropagation();
+                            inV.onkeydown = (e) => {
+                                if (e.key === "Enter") {
+                                    e.target.blur();
+                                }
+                            };
                             inV.onchange = (e) => {
-                                const val = parseValPtBr(e.target.value);
+                                const val = parseValEspacamento(e.target.value);
                                 if (!isNaN(val) && val >= 0) {
                                     aplicarEspacamentoDeterministo("v", val);
                                 } else {
-                                    inV.value = snapshotBaseEspacamento ? snapshotBaseEspacamento.espVAtual.toFixed(1).replace(".", ",") : "0,0";
+                                    inV.value = snapshotBaseEspacamento
+                                        ? formatarValorEspacamento(
+                                            snapshotBaseEspacamento.targetV !== null ? snapshotBaseEspacamento.targetV : snapshotBaseEspacamento.espVAtual,
+                                            snapshotBaseEspacamento.espVIrregular
+                                          )
+                                        : "0,0";
                                 }
                             };
                         }
@@ -5303,6 +5569,7 @@
                             }
                         }
                         arrastoStartPos = null;
+                        invalidarSnapshotEspacamento();
                         atualizarOverlayEdicao();
                     }
 
@@ -5333,6 +5600,7 @@
                         }
                         rotDeltaDeg = 0;
                         rotCentroMeters = null;
+                        invalidarSnapshotEspacamento();
                         atualizarOverlayEdicao();
                     }
 

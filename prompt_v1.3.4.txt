@@ -1,0 +1,82 @@
+<USER_REQUEST>
+Contexto
+Projeto “SIG Salvação” (https://github.com/lucasBalmantcoder/Sig-salvacao): aplicação em HTML e JavaScript puros, com Leaflet, executada com node server/server.js. Exibe 2.800 casas como polígonos, com modo de edição e persistência em dados/casas_ajustadas.json. Restrições vigentes: dados/casas_salvacao.geojson nunca é alterado, os atributos das casas nunca são modificados, todos os polígonos têm o mesmo tamanho e “Lotes iguais” é a visualização padrão.
+
+0. Versionamento
+Esta correção é a v1.3.4, que sucede a v1.3.3.
+
+Atualizar a constante única APP_VERSION para "1.3.4", exibida na interface junto ao título.
+Adicionar ao CHANGELOG.md a entrada da v1.3.4, descrevendo a correção do espaçamento.
+Atualizar o campo version do package.json, se existir.
+
+1. Bug: o ajuste de espaçamento entre polígonos “buga” ao ser aplicado após a seleção
+
+Escopo: corrigir somente os controles de espaçamento horizontal (H) e vertical (V) do popup da seleção. Todas as demais funções estão corretas e não devem ser alteradas.
+
+Sintoma: ao selecionar polígonos e aplicar o espaçamento (botões − e + de H ou V), o resultado é errado ou inconsistente.
+
+Cenário para reproduzir: selecionar as 26 casas de um quarteirão com duas fileiras (1012 a 1132 e 2011 a 2131), com polígonos sobrepostos e vãos irregulares, e clicar em “+” no campo H.
+
+Observações da captura: o campo H exibe 0,0 apesar de haver sobreposição e vãos irregulares, e a seleção contém duas fileiras.
+
+Hipóteses a verificar, em ordem de probabilidade:
+
+As duas fileiras estão sendo tratadas como uma única sequência ordenada pela coordenada horizontal, intercalando casas da fileira superior e da inferior (por exemplo, 1012, 2011, 1022, 2021...). O espaçamento é então calculado entre polígonos que não são vizinhos.
+O valor inicial exibido é a média truncada em 0, escondendo sobreposições e vãos irregulares. Na primeira aplicação, todos os espaçamentos são normalizados de uma vez, e o salto visual é interpretado como bug.
+O instantâneo das posições está desatualizado: foi capturado no momento da seleção, mas houve edição depois (mover, rotacionar, desfazer ou refazer, agrupar), e o espaçamento é aplicado sobre posições antigas.
+O cálculo usa pixels da tela ou os eixos da tela, e não metros ao longo da direção da fileira, o que o faz variar com o zoom e distorcer polígonos levemente inclinados.
+Cliques rápidos geram aplicações concorrentes ou acumulam erros por serem incrementais.
+
+Requisitos da correção:
+
+Detecção de fileiras: antes de calcular o espaçamento, separar a seleção em fileiras (para H) ou colunas (para V), agrupando os polígonos pela coordenada perpendicular, em metros projetados, com uma tolerância baseada na profundidade do polígono (por exemplo, um novo grupo quando a diferença entre polígonos consecutivos exceder metade da profundidade). Cada fileira é ordenada ao longo do seu eixo, e nenhum polígono pode trocar de fileira.
+Espaçamento H: definido como a distância entre as bordas de polígonos vizinhos dentro da mesma fileira, em metros, ao longo da direção da fileira (considerando a leve inclinação). É aplicado de forma independente a cada fileira.
+Espaçamento V: definido como a distância entre as bordas das fileiras adjacentes, em metros. As fileiras se movem como blocos, preservando o espaçamento interno de cada uma.
+Âncora: cada fileira mantém o seu próprio centro fixo ao aplicar H, e o conjunto mantém o seu centro fixo ao aplicar V. Nenhuma fileira se desloca em bloco de forma inesperada.
+Valor absoluto e determinístico: ao definir H ou V, o resultado é calculado sobre um instantâneo e aplicado como valor absoluto, e não como diferença acumulada. Repetir a mesma operação produz o mesmo resultado.
+Instantâneo sempre atualizado: recapturá-lo (e recalcular o valor exibido) sempre que a seleção mudar e após qualquer alteração de geometria (mover, rotacionar, desfazer, refazer, agrupar, nivelar, alinhar em uma linha, agrupar em quarteirão).
+Valor exibido fiel: os campos H e V mostram o espaçamento médio real, inclusive quando há sobreposição (valor negativo, por exemplo −0,4). Se os espaçamentos forem irregulares, indicar visualmente (por exemplo, “~” ou ícone de aviso, com tooltip: “espaçamentos irregulares; ao aplicar, serão uniformizados”).
+Entrada: valor mínimo 0 ao digitar ou ao usar os botões, passo de 0,1 m, vírgula decimal. Valores inválidos são ignorados, sem quebrar o estado.
+Concorrência: cliques rápidos e repetidos resultam em um único estado coerente, sem aplicações simultâneas ou parciais.
+Desfazer: uma sequência contínua de ajustes é registrada como uma entrada no desfazer (Ctrl+Z).
+Restrições: altera somente a posição. Não altera tamanho, rotação, atributos nem a numeração (que continua centralizada em cada polígono). O resultado é salvo em dados/casas_ajustadas.json.
+
+Verificação obrigatória:
+
+Implementar uma função acionável pelo console (por exemplo, verificarEspacamento()) que, para a seleção atual, lista as fileiras detectadas, o espaçamento entre cada par de vizinhos e quantos pares desviam do valor definido por mais de 0,05 m.
+Executá-la no cenário de reprodução (26 casas, duas fileiras) com H = 0, 0,5 e 2,0 m, e com V = 1,0 e 3,0 m, e informar o resultado na entrega.
+
+2. Sem regressões
+Não alterar numeração, menu do botão direito, nivelar na horizontal, alinhar em uma linha, agrupar, agrupar em quarteirão, rotação, movimentação do mapa, clique nos polígonos e persistência.
+
+Critérios de aceite
+
+No cenário de reprodução, clicar em “+” no campo H resulta em duas fileiras, cada uma com o espaçamento definido entre bordas vizinhas, sem sobreposição, sem polígonos trocando de fileira e sem saltos inesperados.
+O mesmo vale para V entre as fileiras.
+O valor exibido nos campos reflete o espaçamento real (inclusive sobreposição), com indicação quando irregular.
+O resultado é idêntico em qualquer zoom e após repetir a operação, e não acumula erro.
+Funciona corretamente após mover, rotacionar, desfazer, refazer e reselecionar.
+verificarEspacamento() retorna zero desvios acima de 0,05 m nos casos testados.
+A versão v1.3.4 aparece na interface, e o CHANGELOG.md está atualizado.
+Os atributos das casas e o arquivo casas_salvacao.geojson permanecem inalterados.
+
+Entrega
+Código das alterações, com a causa real do bug explicada em poucas linhas e o resultado da verificação nos casos acima.
+
+Anexo: captura da seleção de 26 casas com o popup.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-24T13:40:00-03:00.
+
+The user's current state is as follows:
+Active Document: c:\Users\ghost\Documents\Setembro\sig-salvacao\index.html (LANGUAGE_UNSPECIFIED)
+Cursor is on line: 2121
+Other open documents:
+- c:\Users\ghost\Documents\Setembro\sig-salvacao\CHANGELOG.md (LANGUAGE_UNSPECIFIED)
+- c:\Users\ghost\Documents\Setembro\sig-salvacao\gerar_casas.py (LANGUAGE_UNSPECIFIED)
+- c:\Users\ghost\Documents\Setembro\sig-salvacao\apply_part1.py (LANGUAGE_UNSPECIFIED)
+
+The user has uploaded 1 image(s):
+- C:/Users/ghost/.gemini/antigravity/brain/f3e1d8ff-373b-4986-ab1c-fc6a640bf28b/.user_uploaded/media_1792859997949_36f63c94.png
+You can embed this image in an artifact if you need the USER to review it.
+</ADDITIONAL_METADATA>
