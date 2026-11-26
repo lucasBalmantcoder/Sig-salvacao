@@ -4587,38 +4587,6 @@
                 }
 
                 // ============ Movimentação e Rotação ============
-                function moverCasasSelecionadas(dx, dy) {
-                    if (E.selecionadas.size === 0) return;
-                    invalidarSnapshotEspacamento();
-                    for (const id of E.selecionadas) {
-                        const f = mapaCasasPorId.get(id);
-                        if (!f) continue;
-                        const anelAtual = f.properties._anelUni;
-                        const novoAnel = aplicarTranslacaoMetros(anelAtual, dx, dy);
-                        f.properties._anelUni = novoAnel;
-                        if (E.posicao === "uniforme") {
-                            f.geometry.coordinates = [novoAnel];
-                            f.properties._c = centroide(novoAnel);
-                            const layer = mapaCamadasCasas.get(id);
-                            if (layer) {
-                                layer.setLatLngs(novoAnel.map((c) => [c[1], c[0]]));
-                                layer.redraw();
-                            }
-                        }
-                        const cLL = centroide(novoAnel);
-                        if (!E.ajustes[id]) {
-                            E.ajustes[id] = { lng: cLL[0], lat: cLL[1], rot_deg: 0, grupo_id: obterIdGrupo(id), coords: novoAnel };
-                        }
-                        E.ajustes[id].lng = Number(cLL[0].toFixed(7));
-                        E.ajustes[id].lat = Number(cLL[1].toFixed(7));
-                        E.ajustes[id].coords = novoAnel;
-                    }
-                    marcarSalvo(false);
-                    salvarLocalStorage();
-                    atualizarOverlayEdicao();
-                    atualizarUIEdicao();
-                }
-
                 function rotacionarCasasSelecionadas(graus) {
                     if (E.selecionadas.size === 0 || !graus) return;
                     invalidarSnapshotEspacamento();
