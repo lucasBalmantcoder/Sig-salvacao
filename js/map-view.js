@@ -7,7 +7,7 @@ import { carregarAjustesIniciais, atualizarBotoesHistorico } from "./storage.js"
 import { aoClicarCasaModoEdicao, aoMousedownCasaModoEdicao, atualizarUIEdicao } from "./editor.js";
 
 export function initMap() {
-    S.map = L.map("S.map", {
+    S.map = L.map("map", {
         preferCanvas: true,
         zoomControl: false,
         minZoom: 13,
