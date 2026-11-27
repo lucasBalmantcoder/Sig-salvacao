@@ -1653,6 +1653,14 @@
                     .scale({ imperial: false, position: "bottomright" })
                     .addTo(map);
 
+                const numeracaoPane = map.createPane("numeracaoPane");
+                numeracaoPane.style.zIndex = "450";
+                numeracaoPane.style.pointerEvents = "none";
+                const canvasNumEl = $("canvasNumeracao");
+                if (canvasNumEl) {
+                    numeracaoPane.appendChild(canvasNumEl);
+                }
+
                 const BASES = {
                     sat: () =>
                         L.tileLayer(
@@ -2948,19 +2956,23 @@
                                         aoClicarCasaModoEdicao(f, e);
                                     } else {
                                         selecionarCasa(f);
-                                        l.openPopup(e.latlng || l.getBounds().getCenter());
+                                        if (!l.isPopupOpen()) {
+                                            l.openPopup(e.latlng || l.getBounds().getCenter());
+                                        }
                                     }
                                 });
-                                l.on("popupopen", () => {
-                                    const btn =
-                                        document.getElementById(
-                                            "btnVerMoradores",
-                                        );
-                                    if (btn)
-                                        btn.addEventListener("click", () => {
+                                l.on("popupopen", (e) => {
+                                    const popEl = e && e.popup ? e.popup.getElement() : null;
+                                    const btn = popEl
+                                        ? popEl.querySelector(".btn-ver-moradores")
+                                        : document.getElementById("btnVerMoradores");
+                                    if (btn) {
+                                        btn.onclick = (ev) => {
+                                            if (ev) ev.stopPropagation();
                                             map.closePopup();
                                             abrirMoradores(f);
-                                        });
+                                        };
+                                    }
                                 });
                             },
                         },
@@ -3888,6 +3900,11 @@
                     const w = mapEl.clientWidth;
                     const h = mapEl.clientHeight;
                     if (!w || !h) return;
+
+                    const topLeft = map.containerPointToLayerPoint([0, 0]);
+                    L.DomUtil.setPosition(canvas, topLeft);
+                    canvas.style.width = w + "px";
+                    canvas.style.height = h + "px";
 
                     const dpr = window.devicePixelRatio || 1;
                     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
