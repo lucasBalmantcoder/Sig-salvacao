@@ -20,13 +20,14 @@ import {
 } from "./spacing.js";
 import {
     salvarSnapshotHistorico,
+    atualizarBotoesHistorico,
     desfazer,
     refazer,
     salvarLocalStorage,
     marcarSalvo,
     restaurarSelecionadas,
 } from "./storage.js";
-import { pintar, desenhar } from "./map-view.js";
+import { pintar, desenhar, aplicarPosicao } from "./map-view.js";
 
 // ============ Grupos e Quarteirões ============
 export function obterGrupo(id) {
@@ -546,9 +547,11 @@ export function alternarModoApp(modo) {
     pintar();
 }
 
+const getMapEl = () => S.map.getContainer();
+
 export function alternarFerramentaEdicao(f) {
     E.ferramentaEdicao = f;
-    
+    const mapEl = getMapEl();
     if (f === "pan") {
         S.map.dragging.enable();
         mapEl.classList.add("cursor-pan");
@@ -560,26 +563,19 @@ export function alternarFerramentaEdicao(f) {
 
 // ============ Eventos de Arrastar, Rotacionar, Pan e Menu de Contexto ============
 
-
-
-
-
-
-
-
 export function limparEstadoPanEspaco() {
     S.segurandoEspaco = false;
     if (E.modoEdicao && E.ferramentaEdicao === "selecionar") {
         S.map.dragging.disable();
     }
     document.body.classList.remove("cursor-pan-global");
-    mapEl.classList.remove("cursor-pan");
+    getMapEl().classList.remove("cursor-pan");
 }
 
 export function limparEstadoPanMeio() {
     S.panMeioAtivo = false;
     document.body.classList.remove("cursor-pan-global");
-    mapEl.classList.remove("cursor-pan");
+    getMapEl().classList.remove("cursor-pan");
 }
 
 export function fecharMenuContexto() {
@@ -645,6 +641,9 @@ export function abrirMenuContexto(e) {
         };
     }
 }
+
+export function initEditorEvents() {
+    const mapEl = getMapEl();
 
 // Previne autoscroll no botão do meio
 window.addEventListener("auxclick", (e) => {
@@ -894,9 +893,6 @@ window.addEventListener("mouseup", (e) => {
 });
 
 // Menu de contexto com botão direito
-
-export function initEditorEvents() {
-    const mapEl = S.map.getContainer();
     mapEl.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (S.segurandoEspaco || S.panMeioAtivo) return;

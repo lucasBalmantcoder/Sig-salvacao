@@ -3,7 +3,8 @@ import { E, S, st } from "./state.js";
 import { centroide } from "./geometry.js";
 import { desenharNumeracaoCasas } from "./numbering.js";
 import { invalidarSnapshotEspacamento, cancelarPreviewQuarteirao } from "./spacing.js";
-import { obterIdGrupo, atualizarOverlayEdicao, atualizarUIEdicao } from "./editor.js";
+import { obterIdGrupo, obterGrupo, desagrupar, atualizarOverlayEdicao, atualizarUIEdicao } from "./editor.js";
+import { pintar } from "./map-view.js";
 
 
 

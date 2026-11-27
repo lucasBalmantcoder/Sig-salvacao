@@ -583,6 +583,20 @@
         </div>
 
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <script>
+            if (location.protocol === "file:") {
+                var el = document.getElementById("carregando");
+                if (el) {
+                    el.innerHTML =
+                        '<div class="miolo"><p class="nota" style="max-width:46ch;text-align:center">' +
+                        '<b>Não foi possível abrir diretamente pelo arquivo (<code>file://</code>).</b><br><br>' +
+                        'Navegadores bloqueiam módulos JS e leitura de dados locais sem servidor.<br>' +
+                        'Abra pelo link publicado (GitHub Pages) ou inicie um servidor local:<br>' +
+                        '<code>python -m http.server 5000</code> e acesse <code>http://localhost:5000</code>.' +
+                        '</p></div>';
+                }
+            }
+        </script>
         <script type="module" src="js/main.js"></script>
     </body>
 </html>
