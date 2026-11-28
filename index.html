@@ -50,9 +50,17 @@
                         />
                     </svg>
                     <div>
-                        <div style="display: flex; align-items: baseline; gap: 8px;">
+                        <div
+                            style="
+                                display: flex;
+                                align-items: baseline;
+                                gap: 8px;
+                            "
+                        >
                             <h1>SIG Salvação</h1>
-                            <span class="versao-app" id="appVersao">v1.3.4</span>
+                            <span class="versao-app" id="appVersao"
+                                >v1.3.4</span
+                            >
                         </div>
                         <p>
                             Residencial Salvação · Santarém/PA · base CNEFE/IBGE
@@ -77,11 +85,26 @@
                         ><span>outros usos</span>
                     </div>
                 </div>
-                <div class="seg" id="segModo" role="group" aria-label="Modo de operação">
-                    <button data-v="vis" data-m="vis" id="btnModoVis" aria-pressed="true">
+                <div
+                    class="seg"
+                    id="segModo"
+                    role="group"
+                    aria-label="Modo de operação"
+                >
+                    <button
+                        data-v="vis"
+                        data-m="vis"
+                        id="btnModoVis"
+                        aria-pressed="true"
+                    >
                         👁️ Visualização
                     </button>
-                    <button data-v="edit" data-m="edit" id="btnModoEdit" aria-pressed="false">
+                    <button
+                        data-v="edit"
+                        data-m="edit"
+                        id="btnModoEdit"
+                        aria-pressed="false"
+                    >
                         ✏️ Modo Edição
                     </button>
                 </div>
@@ -105,64 +128,291 @@
 
             <div class="corpo">
                 <aside>
-                    <div class="grupo secao-edicao-destaque" id="grupoEdicao" style="display: none;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
-                            <h2 style="color: var(--accent); font-weight: 700;">Modo de Edição</h2>
-                            <span class="badge-salvo" id="badgeSalvo">✓ Salvo</span>
+                    <div
+                        class="grupo secao-edicao-destaque"
+                        id="grupoEdicao"
+                        style="display: none"
+                    >
+                        <div
+                            style="
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                gap: 6px;
+                            "
+                        >
+                            <h2 style="color: var(--accent); font-weight: 700">
+                                Modo de Edição
+                            </h2>
+                            <span class="badge-salvo" id="badgeSalvo"
+                                >✓ Salvo</span
+                            >
                         </div>
-                        <div class="chip" style="width: 100%; justify-content: space-between;">
+                        <div
+                            class="chip"
+                            style="width: 100%; justify-content: space-between"
+                        >
                             <b id="edContadorSel">0 casas selecionadas</b>
-                            <span class="mono" id="edContadorGrupos">0 grupos</span>
+                            <span class="mono" id="edContadorGrupos"
+                                >0 grupos</span
+                            >
                         </div>
-                        <div class="seg" id="segFerramentaEdicao" role="group" aria-label="Ferramenta de edição">
-                            <button data-v="selecionar" data-f="selecionar" id="btnFerramentaSel" aria-pressed="true">⬚ Seleção / Mover</button>
-                            <button data-v="pan" data-f="pan" id="btnFerramentaPan" aria-pressed="false">✋ Mover mapa (Pan)</button>
+                        <div
+                            class="seg"
+                            id="segFerramentaEdicao"
+                            role="group"
+                            aria-label="Ferramenta de edição"
+                        >
+                            <button
+                                data-v="selecionar"
+                                data-f="selecionar"
+                                id="btnFerramentaSel"
+                                aria-pressed="true"
+                            >
+                                ⬚ Seleção / Mover
+                            </button>
+                            <button
+                                data-v="pan"
+                                data-f="pan"
+                                id="btnFerramentaPan"
+                                aria-pressed="false"
+                            >
+                                ✋ Mover mapa (Pan)
+                            </button>
                         </div>
-                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <label style="font-size:12px; font-weight:600;">Girar seleção:</label>
-                                <span class="mono" id="edRotLabel" style="font-size:12px; color:var(--ink-2);">0.0°</span>
+                        <div
+                            style="
+                                display: flex;
+                                flex-direction: column;
+                                gap: 4px;
+                            "
+                        >
+                            <div
+                                style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                "
+                            >
+                                <label style="font-size: 12px; font-weight: 600"
+                                    >Girar seleção:</label
+                                >
+                                <span
+                                    class="mono"
+                                    id="edRotLabel"
+                                    style="font-size: 12px; color: var(--ink-2)"
+                                    >0.0°</span
+                                >
                             </div>
-                            <div style="display: flex; gap: 4px; align-items: center;">
-                                <button class="btn" id="btnRotM15" style="padding: 4px 6px; font-size:11px;" title="Girar -15°">-15°</button>
-                                <button class="btn" id="btnRotM1" style="padding: 4px 6px; font-size:11px;" title="Girar -1°">-1°</button>
-                                <input type="number" id="inpRotGraus" value="0" step="0.5" style="width: 65px; text-align: center; padding: 4px 2px;" title="Ângulo em graus" />
-                                <button class="btn" id="btnRotP1" style="padding: 4px 6px; font-size:11px;" title="Girar +1°">+1°</button>
-                                <button class="btn" id="btnRotP15" style="padding: 4px 6px; font-size:11px;" title="Girar +15°">+15°</button>
+                            <div
+                                style="
+                                    display: flex;
+                                    gap: 4px;
+                                    align-items: center;
+                                "
+                            >
+                                <button
+                                    class="btn"
+                                    id="btnRotM15"
+                                    style="padding: 4px 6px; font-size: 11px"
+                                    title="Girar -15°"
+                                >
+                                    -15°
+                                </button>
+                                <button
+                                    class="btn"
+                                    id="btnRotM1"
+                                    style="padding: 4px 6px; font-size: 11px"
+                                    title="Girar -1°"
+                                >
+                                    -1°
+                                </button>
+                                <input
+                                    type="number"
+                                    id="inpRotGraus"
+                                    value="0"
+                                    step="0.5"
+                                    style="
+                                        width: 65px;
+                                        text-align: center;
+                                        padding: 4px 2px;
+                                    "
+                                    title="Ângulo em graus"
+                                />
+                                <button
+                                    class="btn"
+                                    id="btnRotP1"
+                                    style="padding: 4px 6px; font-size: 11px"
+                                    title="Girar +1°"
+                                >
+                                    +1°
+                                </button>
+                                <button
+                                    class="btn"
+                                    id="btnRotP15"
+                                    style="padding: 4px 6px; font-size: 11px"
+                                    title="Girar +15°"
+                                >
+                                    +15°
+                                </button>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 6px;">
-                            <button class="btn" id="btnAgrupar" style="flex: 1;" disabled title="Agrupa 2 ou mais casas selecionadas">🔗 Agrupar</button>
-                            <button class="btn" id="btnDesagrupar" style="flex: 1;" disabled title="Desfaz o grupo das casas selecionadas">⛓️‍💥 Desagrupar</button>
+                        <div style="display: flex; gap: 6px">
+                            <button
+                                class="btn"
+                                id="btnAgrupar"
+                                style="flex: 1"
+                                disabled
+                                title="Agrupa 2 ou mais casas selecionadas"
+                            >
+                                🔗 Agrupar
+                            </button>
+                            <button
+                                class="btn"
+                                id="btnDesagrupar"
+                                style="flex: 1"
+                                disabled
+                                title="Desfaz o grupo das casas selecionadas"
+                            >
+                                ⛓️‍💥 Desagrupar
+                            </button>
                         </div>
-                        <button class="btn" id="btnQuarteirao" style="width: 100%; font-weight: 600;" disabled title="Organiza as casas selecionadas em quarteirão padronizado de duas fileiras paralelas">🏘️ Agrupar em quarteirão</button>
-                        <div style="display: flex; gap: 6px;">
-                            <button class="btn" id="btnDesfazer" style="flex: 1;" disabled title="Ctrl+Z">↩ Desfazer</button>
-                            <button class="btn" id="btnRefazer" style="flex: 1;" disabled title="Ctrl+Y">↪ Refazer</button>
+                        <button
+                            class="btn"
+                            id="btnQuarteirao"
+                            style="width: 100%; font-weight: 600"
+                            disabled
+                            title="Organiza as casas selecionadas em quarteirão padronizado de duas fileiras paralelas"
+                        >
+                            🏘️ Agrupar em quarteirão
+                        </button>
+                        <div style="display: flex; gap: 6px">
+                            <button
+                                class="btn"
+                                id="btnDesfazer"
+                                style="flex: 1"
+                                disabled
+                                title="Ctrl+Z"
+                            >
+                                ↩ Desfazer
+                            </button>
+                            <button
+                                class="btn"
+                                id="btnRefazer"
+                                style="flex: 1"
+                                disabled
+                                title="Ctrl+Y"
+                            >
+                                ↪ Refazer
+                            </button>
                         </div>
-                        <hr style="margin: 4px 0;" />
-                        <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <button class="btn primario" id="btnSalvarAjustes" style="width: 100%; font-weight: 700;">💾 Salvar casas_ajustadas.json</button>
-                            <button class="btn" id="btnExportarGeojson" style="width: 100%;">🌐 Exportar GeoJSON ajustado</button>
-                            <div style="display: flex; gap: 6px;">
-                                <button class="btn" id="btnImportarAjustes" style="flex: 1;">📂 Importar JSON</button>
-                                <input type="file" id="inputImportar" accept=".json" style="display: none;" />
-                                <button class="btn" id="btnRestaurarMenu" style="flex: 1;">↺ Restaurar ▾</button>
+                        <hr style="margin: 4px 0" />
+                        <div
+                            style="
+                                display: flex;
+                                flex-direction: column;
+                                gap: 6px;
+                            "
+                        >
+                            <button
+                                class="btn primario"
+                                id="btnSalvarAjustes"
+                                style="width: 100%; font-weight: 700"
+                            >
+                                💾 Salvar casas_ajustadas.json
+                            </button>
+                            <button
+                                class="btn"
+                                id="btnExportarGeojson"
+                                style="width: 100%"
+                            >
+                                🌐 Exportar GeoJSON ajustado
+                            </button>
+                            <div style="display: flex; gap: 6px">
+                                <button
+                                    class="btn"
+                                    id="btnImportarAjustes"
+                                    style="flex: 1"
+                                >
+                                    📂 Importar JSON
+                                </button>
+                                <input
+                                    type="file"
+                                    id="inputImportar"
+                                    accept=".json"
+                                    style="display: none"
+                                />
+                                <button
+                                    class="btn"
+                                    id="btnRestaurarMenu"
+                                    style="flex: 1"
+                                >
+                                    ↺ Restaurar ▾
+                                </button>
                             </div>
-                            <div id="menuRestaurar" style="display: none; flex-direction: column; gap: 4px; background: var(--surface); padding: 8px; border-radius: 6px; border: 1px solid var(--border-strong);">
-                                <button class="btn" id="btnRestaurarSel" style="font-size: 12px; padding: 4px 6px; text-align: left;">↺ Restaurar selecionadas</button>
-                                <button class="btn" id="btnRestaurarQuarteirao" style="font-size: 12px; padding: 4px 6px; text-align: left;">🏘️ Restaurar quarteirão da seleção</button>
-                                <button class="btn" id="btnRestaurarTodas" style="font-size: 12px; padding: 4px 6px; text-align: left; color: var(--warn);">⚠️ Restaurar todas ao original</button>
+                            <div
+                                id="menuRestaurar"
+                                style="
+                                    display: none;
+                                    flex-direction: column;
+                                    gap: 4px;
+                                    background: var(--surface);
+                                    padding: 8px;
+                                    border-radius: 6px;
+                                    border: 1px solid var(--border-strong);
+                                "
+                            >
+                                <button
+                                    class="btn"
+                                    id="btnRestaurarSel"
+                                    style="
+                                        font-size: 12px;
+                                        padding: 4px 6px;
+                                        text-align: left;
+                                    "
+                                >
+                                    ↺ Restaurar selecionadas
+                                </button>
+                                <button
+                                    class="btn"
+                                    id="btnRestaurarQuarteirao"
+                                    style="
+                                        font-size: 12px;
+                                        padding: 4px 6px;
+                                        text-align: left;
+                                    "
+                                >
+                                    🏘️ Restaurar quarteirão da seleção
+                                </button>
+                                <button
+                                    class="btn"
+                                    id="btnRestaurarTodas"
+                                    style="
+                                        font-size: 12px;
+                                        padding: 4px 6px;
+                                        text-align: left;
+                                        color: var(--warn);
+                                    "
+                                >
+                                    ⚠️ Restaurar todas ao original
+                                </button>
                             </div>
                         </div>
-                        <p class="nota" style="font-size: 11px; line-height: 1.45;">
+                        <p
+                            class="nota"
+                            style="font-size: 11px; line-height: 1.45"
+                        >
                             <b>Dicas de uso:</b><br />
                             • <b>Clique:</b> seleciona casa / grupo.<br />
                             • <b>Shift/Ctrl + clique:</b> adiciona/remove.<br />
-                            • <b>Arrastar em área vazia:</b> seleção por retângulo.<br />
-                            • <b>Arrastar casa:</b> move a seleção como bloco.<br />
-                            • <b>Alça no mapa / Graus:</b> rotaciona em metros.<br />
-                            • <b>Botão direito ou Espaço:</b> move o mapa (pan).<br />
+                            • <b>Arrastar em área vazia:</b> seleção por
+                            retângulo.<br />
+                            • <b>Arrastar casa:</b> move a seleção como
+                            bloco.<br />
+                            • <b>Alça no mapa / Graus:</b> rotaciona em
+                            metros.<br />
+                            • <b>Botão direito ou Espaço:</b> move o mapa
+                            (pan).<br />
                             • <b>Ctrl+Z / Ctrl+Y:</b> desfaz e refaz.
                         </p>
                     </div>
@@ -202,7 +452,8 @@
                             </button>
                         </div>
                         <p class="nota" id="notaPos">
-                            Cada face dividida em lotes de largura igual, no tamanho e alinhamento padronizados.
+                            Cada face dividida em lotes de largura igual, no
+                            tamanho e alinhamento padronizados.
                         </p>
                     </div>
 
@@ -527,15 +778,56 @@
 
                 <div class="mapa-wrap">
                     <div id="map"></div>
-                    <canvas id="canvasNumeracao" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 450;"></canvas>
-                    <div id="menuContextoMapa" class="menu-contexto" style="display: none;"></div>
-                    <div id="marqueeBox" class="marcador-selecao-box" style="display: none;"></div>
-                    <div id="barraFlutuanteSelecao" class="barra-flutuante-selecao" style="display: none;"></div>
-                    <div id="bannerPreviewQuarteirao" class="banner-preview-quarteirao" style="display: none;">
-                        <span id="previewQuarteiraoTexto">Pré-visualização do Quarteirão Padronizado</span>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn primario" id="btnConfirmarQuarteirao" style="padding: 4px 10px; font-weight: 700;">✓ Confirmar</button>
-                            <button class="btn" id="btnCancelarQuarteirao" style="padding: 4px 10px;">✕ Cancelar</button>
+                    <canvas
+                        id="canvasNumeracao"
+                        style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            pointer-events: none;
+                            z-index: 450;
+                        "
+                    ></canvas>
+                    <div
+                        id="menuContextoMapa"
+                        class="menu-contexto"
+                        style="display: none"
+                    ></div>
+                    <div
+                        id="marqueeBox"
+                        class="marcador-selecao-box"
+                        style="display: none"
+                    ></div>
+                    <div
+                        id="barraFlutuanteSelecao"
+                        class="barra-flutuante-selecao"
+                        style="display: none"
+                    ></div>
+                    <div
+                        id="bannerPreviewQuarteirao"
+                        class="banner-preview-quarteirao"
+                        style="display: none"
+                    >
+                        <span id="previewQuarteiraoTexto"
+                            >Pré-visualização do Quarteirão Padronizado</span
+                        >
+                        <div style="display: flex; gap: 8px">
+                            <button
+                                class="btn primario"
+                                id="btnConfirmarQuarteirao"
+                                style="padding: 4px 10px; font-weight: 700"
+                            >
+                                ✓ Confirmar
+                            </button>
+                            <button
+                                class="btn"
+                                id="btnCancelarQuarteirao"
+                                style="padding: 4px 10px"
+                            >
+                                ✕ Cancelar
+                            </button>
                         </div>
                     </div>
                     <div class="painel-flutuante" id="dica">
@@ -589,11 +881,11 @@
                 if (el) {
                     el.innerHTML =
                         '<div class="miolo"><p class="nota" style="max-width:46ch;text-align:center">' +
-                        '<b>Não foi possível abrir diretamente pelo arquivo (<code>file://</code>).</b><br><br>' +
-                        'Navegadores bloqueiam módulos JS e leitura de dados locais sem servidor.<br>' +
-                        'Abra pelo link publicado (GitHub Pages) ou inicie um servidor local:<br>' +
-                        '<code>python -m http.server 5000</code> e acesse <code>http://localhost:5000</code>.' +
-                        '</p></div>';
+                        "<b>Não foi possível abrir diretamente pelo arquivo (<code>file://</code>).</b><br><br>" +
+                        "Navegadores bloqueiam módulos JS e leitura de dados locais sem servidor.<br>" +
+                        "Abra pelo link publicado (GitHub Pages) ou inicie um servidor local:<br>" +
+                        "<code>python -m http.server 5000</code> e acesse <code>http://localhost:5000</code>." +
+                        "</p></div>";
                 }
             }
         </script>
