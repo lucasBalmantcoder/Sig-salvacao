@@ -605,7 +605,7 @@ export function abrirMenuContexto(e) {
     `;
 
     menu.style.display = "flex";
-    const rect = mapEl.getBoundingClientRect();
+    const rect = getMapEl().getBoundingClientRect();
     let x = e.clientX - rect.left;
     let y = e.clientY - rect.top;
 

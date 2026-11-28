@@ -111,11 +111,11 @@ export function calcularQuarteiraoPadronizado(conjuntoIds) {
     // 5. Posicionamento padronizado em 2 fileiras paralelas e alinhadas
     const W = PADRAO_LARGURA_M;
     const D = PADRAO_PROFUNDIDADE_M;
-    const S = PADRAO_ESPACAMENTO_M;
+    const ESP = PADRAO_ESPACAMENTO_M;
     const G = PADRAO_INTERVALO_FILEIRAS_M;
 
     const nMax = Math.max(fil1Ord.length, fil2Ord.length);
-    const passoLote = W + S;
+    const passoLote = W + ESP;
     const distCentroFileiras = D + G;
 
     const resultadoAjustes = new Map();
@@ -274,8 +274,8 @@ export function calcularAlinhamentoLinha(conjuntoIds) {
 
     const W = PADRAO_LARGURA_M;
     const D = PADRAO_PROFUNDIDADE_M;
-    const S = PADRAO_ESPACAMENTO_M;
-    const passo = W + S;
+    const ESP = PADRAO_ESPACAMENTO_M;
+    const passo = W + ESP;
     const m = casasOrdenadas.length;
     const x0 = centroMetros.x - ((m - 1) / 2) * passo;
 
